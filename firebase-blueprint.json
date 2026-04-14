@@ -1,0 +1,167 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Stores user information and roles",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "mentor", "student"] },
+        "avatarUrl": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "kycStatus": { "type": "string", "enum": ["not_started", "pending", "verified", "rejected"] },
+        "kycData": {
+          "type": "object",
+          "properties": {
+            "idType": { "type": "string" },
+            "idNumber": { "type": "string" },
+            "idImageUrl": { "type": "string" },
+            "address": { "type": "string" },
+            "phoneNumber": { "type": "string" },
+            "bankName": { "type": "string" },
+            "accountNumber": { "type": "string" },
+            "accountName": { "type": "string" },
+            "submittedAt": { "type": "number" },
+            "verifiedAt": { "type": "number" },
+            "rejectionReason": { "type": "string" }
+          }
+        },
+        "onboardingCompleted": { "type": "boolean" },
+        "onboardingStep": { "type": "number" }
+      },
+      "required": ["uid", "email", "name", "role", "createdAt"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "Educational courses offered by mentors",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "mentorId": { "type": "string" },
+        "mentorName": { "type": "string" },
+        "price": { "type": "number" },
+        "commissionRate": { "type": "number" }
+      },
+      "required": ["id", "title", "mentorId", "price", "commissionRate"]
+    },
+    "Enrollment": {
+      "title": "Enrollment",
+      "description": "Tracks student enrollment in courses",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "courseId": { "type": "string" },
+        "courseTitle": { "type": "string" },
+        "mentorId": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "active", "completed", "cancelled"] },
+        "onboardedAt": { "type": "number" },
+        "totalPaid": { "type": "number" },
+        "commissionEarned": { "type": "number" }
+      },
+      "required": ["id", "studentId", "courseId", "mentorId", "status", "onboardedAt"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Records student payments",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "enrollmentId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "amount": { "type": "number" },
+        "date": { "type": "number" },
+        "status": { "type": "string", "enum": ["success", "failed"] },
+        "receiptUrl": { "type": "string" }
+      },
+      "required": ["id", "enrollmentId", "studentId", "amount", "date", "status"]
+    },
+    "Payout": {
+      "title": "Payout",
+      "description": "Mentor commission payouts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "mentorId": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "processed", "failed"] },
+        "requestedAt": { "type": "number" },
+        "processedAt": { "type": "number" },
+        "receiptUrl": { "type": "string" }
+      },
+      "required": ["id", "mentorId", "amount", "status", "requestedAt"]
+    },
+    "Session": {
+      "title": "Session",
+      "description": "Mentoring sessions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "courseId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "mentorId": { "type": "string" },
+        "date": { "type": "number" },
+        "status": { "type": "string", "enum": ["scheduled", "completed", "cancelled"] },
+        "feedback": { "type": "string" },
+        "rating": { "type": "number" }
+      },
+      "required": ["id", "courseId", "studentId", "mentorId", "date", "status"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Direct messages",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "chatId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "content": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "chatId", "senderId", "content", "timestamp"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "Conversation between users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "participants": { "type": "array", "items": { "type": "string" } },
+        "lastMessage": { "type": "string" },
+        "lastTimestamp": { "type": "number" }
+      },
+      "required": ["id", "participants"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User alerts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["session", "payment", "payout", "message"] },
+        "read": { "type": "boolean" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "userId", "title", "message", "type", "read", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": { "schema": "UserProfile", "description": "User profiles" },
+    "/courses/{courseId}": { "schema": "Course", "description": "Courses list" },
+    "/enrollments/{enrollmentId}": { "schema": "Enrollment", "description": "Student enrollments" },
+    "/payments/{paymentId}": { "schema": "Payment", "description": "Payment records" },
+    "/payouts/{payoutId}": { "schema": "Payout", "description": "Payout records" },
+    "/sessions/{sessionId}": { "schema": "Session", "description": "Mentoring sessions" },
+    "/chats/{chatId}": { "schema": "Chat", "description": "Chat metadata" },
+    "/chats/{chatId}/messages/{messageId}": { "schema": "Message", "description": "Chat messages" },
+    "/notifications/{notificationId}": { "schema": "Notification", "description": "User notifications" }
+  }
+}
