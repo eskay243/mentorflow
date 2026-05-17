@@ -23,6 +23,11 @@ export default function NotificationsView() {
     }
   };
 
+  const markAllAsRead = async () => {
+    const unread = notifications.filter(n => !n.read);
+    await Promise.all(unread.map(n => updateDoc(doc(db, 'notifications', n.id), { read: true })));
+  };
+
   const getIcon = (type: string) => {
     switch (type) {
       case 'message': return <MessageSquare className="w-4 h-4" />;
@@ -36,7 +41,7 @@ export default function NotificationsView() {
     <div className="space-y-6 max-w-3xl mx-auto">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold tracking-tight">Notifications</h2>
-        <Button variant="outline" size="sm">Mark all as read</Button>
+        <Button variant="outline" size="sm" onClick={() => void markAllAsRead()}>Mark all as read</Button>
       </div>
 
       <div className="space-y-4">

@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, query, where, getDocs, updateDoc } from 'firebase/firestore';
-import { auth, db } from '@/lib/firebase';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { auth, app, db } from '@/lib/firebase';
 import { UserProfile } from '@/types';
 
 interface AuthContextType {
@@ -15,57 +16,66 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+async function trySyncAdminClaim(user: User): Promise<void> {
+  const key = `admin_claim_attempted_${user.uid}`;
+  if (sessionStorage.getItem(key)) return;
+  sessionStorage.setItem(key, '1');
+  try {
+    const fn = httpsCallable(getFunctions(app), 'claimAdminIfEligible');
+    await fn({});
+    await user.getIdToken(true);
+  } catch {
+    /* Not eligible, Functions not deployed, or network error */
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [tokenAdmin, setTokenAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setUser(user);
-      if (user) {
-        const docRef = doc(db, 'users', user.uid);
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      void (async () => {
+        setUser(firebaseUser);
+        if (!firebaseUser) {
+          setProfile(null);
+          setTokenAdmin(false);
+          setLoading(false);
+          return;
+        }
+
+        const docRef = doc(db, 'users', firebaseUser.uid);
         const docSnap = await getDoc(docRef);
-        
+
         if (docSnap.exists()) {
           setProfile(docSnap.data() as UserProfile);
         } else {
-          // Check if there's a pre-created profile with this email (e.g. added by admin)
-          const q = query(collection(db, 'users'), where('email', '==', user.email));
+          const q = query(collection(db, 'users'), where('email', '==', firebaseUser.email));
           const emailSnap = await getDocs(q);
-          
+
           if (!emailSnap.empty) {
             const existingDoc = emailSnap.docs[0];
             const existingData = existingDoc.data() as UserProfile;
-            
-            // Claim the profile by updating it with the real UID
             const updatedProfile = {
               ...existingData,
-              uid: user.uid,
-              name: user.displayName || existingData.name, // Prefer Google name if available
+              uid: firebaseUser.uid,
+              name: firebaseUser.displayName || existingData.name,
             };
-            
-            // If the document ID was random/pending, we should probably create a new one with UID as key
-            // and delete the old one, or just update the existing one.
-            // For simplicity, let's create a new one with UID as key and delete the old one if needed.
-            await setDoc(doc(db, 'users', user.uid), updatedProfile);
-            if (existingDoc.id !== user.uid) {
-              // Note: We don't strictly need to delete the old one if it was just a placeholder,
-              // but it's cleaner. However, if we use email as ID it might be different.
-              // For now, just ensure the UID-based one exists.
-            }
+            await setDoc(doc(db, 'users', firebaseUser.uid), updatedProfile);
             setProfile(updatedProfile);
           } else {
-            // Create default profile if not exists
-            const isAdminEmail = user.email === 'eskay243@gmail.com';
-            const preferredRole = localStorage.getItem('preferred_role') as 'student' | 'mentor' | null;
-            
-            const role = isAdminEmail ? 'admin' : (preferredRole || 'student');
-            
+            const preferredRole = localStorage.getItem('preferred_role') as
+              | 'student'
+              | 'mentor'
+              | null;
+            const role = preferredRole || 'student';
+
             const newProfile: UserProfile = {
-              uid: user.uid,
-              email: user.email || '',
-              name: user.displayName || 'User',
+              uid: firebaseUser.uid,
+              email: firebaseUser.email || '',
+              name: firebaseUser.displayName || 'User',
               role,
               createdAt: Date.now(),
             };
@@ -73,18 +83,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (role === 'mentor' || role === 'student') {
               newProfile.kycStatus = 'not_started';
             }
-            
-            // Clean up
+
             localStorage.removeItem('preferred_role');
-            
             await setDoc(docRef, newProfile);
             setProfile(newProfile);
           }
         }
-      } else {
-        setProfile(null);
-      }
-      setLoading(false);
+
+        await trySyncAdminClaim(firebaseUser);
+        const afterClaim = await getDoc(docRef);
+        if (afterClaim.exists()) {
+          setProfile(afterClaim.data() as UserProfile);
+        }
+        const tokenResult = await firebaseUser.getIdTokenResult(true);
+        setTokenAdmin(tokenResult.claims.admin === true);
+        setLoading(false);
+      })();
     });
 
     return unsubscribe;
@@ -94,7 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user,
     profile,
     loading,
-    isAdmin: profile?.role === 'admin' || user?.email === 'eskay243@gmail.com',
+    isAdmin: profile?.role === 'admin' || tokenAdmin,
     isMentor: profile?.role === 'mentor',
     isStudent: profile?.role === 'student',
   };

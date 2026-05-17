@@ -69,6 +69,7 @@ export interface Payment {
   date: number;
   status: 'success' | 'failed';
   receiptUrl?: string;
+  paystackReference?: string;
 }
 
 export interface Payout {
