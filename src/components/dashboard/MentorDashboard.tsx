@@ -1,33 +1,13 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useFirestoreCollection } from '@/hooks/useFirestore';
-import { where, addDoc, collection } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
-import { toast } from 'sonner';
+import { where } from 'firebase/firestore';
 import { Enrollment, Payout, Course } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { DollarSign, Users, BookOpen, TrendingUp, AlertTriangle, CalendarPlus, Loader2 } from 'lucide-react';
+import { DollarSign, Users, BookOpen, TrendingUp, AlertTriangle } from 'lucide-react';
 import { 
   BarChart, 
   Bar, 
@@ -42,10 +22,6 @@ import {
 
 export default function MentorDashboard({ onCompleteKyc }: { onCompleteKyc: () => void }) {
   const { profile } = useAuth();
-  const [sessionOpen, setSessionOpen] = useState(false);
-  const [sessionEnrollmentId, setSessionEnrollmentId] = useState('');
-  const [sessionWhen, setSessionWhen] = useState('');
-  const [scheduling, setScheduling] = useState(false);
   
   const { data: enrollments } = useFirestoreCollection<Enrollment>('enrollments', [
     where('mentorId', '==', profile?.uid || '')
@@ -78,35 +54,6 @@ export default function MentorDashboard({ onCompleteKyc }: { onCompleteKyc: () =
     }
     return acc;
   }, []).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-  const handleScheduleSession = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!profile?.uid || !sessionEnrollmentId || !sessionWhen) {
-      toast.error('Choose an enrollment and date/time.');
-      return;
-    }
-    const enr = enrollments.find((x) => x.id === sessionEnrollmentId);
-    if (!enr) return;
-    setScheduling(true);
-    try {
-      await addDoc(collection(db, 'sessions'), {
-        courseId: enr.courseId,
-        studentId: enr.studentId,
-        mentorId: profile.uid,
-        date: new Date(sessionWhen).getTime(),
-        status: 'scheduled',
-      });
-      toast.success('Session scheduled');
-      setSessionOpen(false);
-      setSessionEnrollmentId('');
-      setSessionWhen('');
-    } catch (err) {
-      console.error(err);
-      toast.error('Could not schedule session.');
-    } finally {
-      setScheduling(false);
-    }
-  };
 
   return (
     <div className="space-y-8">
@@ -211,64 +158,8 @@ export default function MentorDashboard({ onCompleteKyc }: { onCompleteKyc: () =
       </div>
 
       <Card>
-        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+        <CardHeader>
           <CardTitle>Recent Enrollments</CardTitle>
-          <Dialog open={sessionOpen} onOpenChange={setSessionOpen}>
-            <DialogTrigger asChild>
-              <Button size="sm" variant="outline" className="gap-2">
-                <CalendarPlus className="h-4 w-4" />
-                Schedule session
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <form onSubmit={handleScheduleSession}>
-                <DialogHeader>
-                  <DialogTitle>Schedule a session</DialogTitle>
-                  <DialogDescription>
-                    Creates a scheduled session for a student you are mentoring.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-4 py-4">
-                  <div className="grid gap-2">
-                    <Label>Enrollment</Label>
-                    <Select
-                      value={sessionEnrollmentId}
-                      onValueChange={setSessionEnrollmentId}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select enrollment" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {enrollments.map((en) => (
-                          <SelectItem key={en.id} value={en.id}>
-                            {en.studentName} — {en.courseTitle}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="session-when">Date and time</Label>
-                    <Input
-                      id="session-when"
-                      type="datetime-local"
-                      value={sessionWhen}
-                      onChange={(ev) => setSessionWhen(ev.target.value)}
-                    />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button type="submit" disabled={scheduling || enrollments.length === 0}>
-                    {scheduling ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      'Save session'
-                    )}
-                  </Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
         </CardHeader>
         <CardContent>
           <Table>

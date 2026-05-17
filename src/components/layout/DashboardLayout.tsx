@@ -1,13 +1,13 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import {
-  LayoutDashboard,
-  Users,
-  BookOpen,
-  CreditCard,
-  MessageSquare,
-  Bell,
-  Settings,
+import { 
+  LayoutDashboard, 
+  Users, 
+  BookOpen, 
+  CreditCard, 
+  MessageSquare, 
+  Bell, 
+  Settings, 
   LogOut,
   Menu,
   X,
@@ -48,7 +48,7 @@ const SidebarItem = ({ icon: Icon, label, isActive, onClick }: SidebarItemProps)
 );
 
 interface DashboardLayoutProps {
-  children: ((activeTab: string, setActiveTab: (tab: string) => void) => React.ReactNode) | React.ReactNode;
+  children: React.ReactNode;
   userRole: 'admin' | 'mentor' | 'student';
   userName: string;
   userEmail: string;
@@ -159,14 +159,7 @@ export default function DashboardLayout({
           </div>
 
           <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="relative"
-              type="button"
-              onClick={() => setActiveTab('notifications')}
-              aria-label="Open notifications"
-            >
+            <Button variant="ghost" size="icon" className="relative">
               <Bell className="w-5 h-5" />
               <span className="absolute top-2 right-2 w-2 h-2 bg-destructive rounded-full" />
             </Button>

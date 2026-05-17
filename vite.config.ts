@@ -11,20 +11,9 @@ export default defineConfig(({mode}) => {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
     resolve: {
-      alias: [
-        {
-          find: '@/components/ui/textarea',
-          replacement: path.resolve(
-            __dirname,
-            './src/components/ui/textarea.tsx',
-          ),
-        },
-        {
-          find: '@/components/ui',
-          replacement: path.resolve(__dirname, './components/ui'),
-        },
-        {find: '@', replacement: path.resolve(__dirname, './src')},
-      ],
+      alias: {
+        '@': path.resolve(__dirname, './src'),
+      },
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

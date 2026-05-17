@@ -17,7 +17,6 @@ import PaymentsView from './components/payments/PaymentsView';
 import PayoutsView from './components/payouts/PayoutsView';
 import NotificationsView from './components/notifications/NotificationsView';
 import SettingsView from './components/settings/SettingsView';
-import CommissionsView from './components/commissions/CommissionsView';
 import SessionsView from './components/sessions/SessionsView';
 import { Toaster } from '@/components/ui/sonner';
 import { auth } from './lib/firebase';
@@ -69,8 +68,7 @@ function AppContent() {
       case 'notifications':
         return <NotificationsView />;
       case 'commissions':
-        if (isMentor) return <CommissionsView />;
-        return null;
+        return <MentorDashboard onCompleteKyc={() => setActiveTab('kyc')} />; // Reuse dashboard or create specific view
       default:
         return (
           <div className="p-12 text-center bg-card rounded-xl border border-dashed">

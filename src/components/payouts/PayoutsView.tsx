@@ -18,21 +18,22 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { collection, addDoc, where } from 'firebase/firestore';
+import { collection, addDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { toast } from 'sonner';
 
 export default function PayoutsView() {
   const { isAdmin, profile } = useAuth();
-  const payoutConstraints = isAdmin ? [] : [where('mentorId', '==', profile?.uid || '')];
-  const { data: payouts } = useFirestoreCollection<Payout>('payouts', payoutConstraints);
+  const { data: payouts } = useFirestoreCollection<Payout>('payouts');
   const { data: users } = useFirestoreCollection<UserProfile>('users');
 
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [payoutAmount, setPayoutAmount] = useState('');
 
-  const filteredPayouts = payouts;
+  const filteredPayouts = isAdmin 
+    ? payouts 
+    : payouts.filter(p => p.mentorId === profile?.uid);
 
   const handleRequestPayout = async (e: React.FormEvent) => {
     e.preventDefault();

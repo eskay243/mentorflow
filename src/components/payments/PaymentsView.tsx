@@ -1,18 +1,14 @@
 import React from 'react';
 import { useFirestoreCollection } from '@/hooks/useFirestore';
-import { Payment } from '@/types';
-import { useAuth } from '@/context/AuthContext';
-import { where } from 'firebase/firestore';
-import { Card, CardContent } from '@/components/ui/card';
+import { Payment, Enrollment } from '@/types';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { FileText } from 'lucide-react';
+import { FileText, Download, ExternalLink } from 'lucide-react';
 
 export default function PaymentsView() {
-  const { isAdmin, profile } = useAuth();
-  const constraints = isAdmin ? [] : [where('studentId', '==', profile?.uid || '')];
-  const { data: payments } = useFirestoreCollection<Payment>('payments', constraints);
+  const { data: payments } = useFirestoreCollection<Payment>('payments');
 
   return (
     <div className="space-y-6">

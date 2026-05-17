@@ -16,12 +16,6 @@
     "allowJs": true,
     "jsx": "react-jsx",
     "paths": {
-      "@/components/ui/textarea": [
-        "./src/components/ui/textarea.tsx"
-      ],
-      "@/components/ui/*": [
-        "./components/ui/*"
-      ],
       "@/*": [
         "./src/*"
       ]

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useFirestoreCollection } from '@/hooks/useFirestore';
-import { Course, UserProfile, type Enrollment } from '@/types';
+import { Course, UserProfile } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Plus, BookOpen, User, DollarSign, Loader2 } from 'lucide-react';
@@ -18,27 +18,19 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import {
-  collection,
-  doc,
-  setDoc,
-  addDoc,
-  query,
-  where,
-  getDocs,
-} from 'firebase/firestore';
+import { collection, addDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { toast } from 'sonner';
+
 import { useAuth } from '@/context/AuthContext';
 
 export default function CoursesView() {
-  const { profile, isAdmin, isMentor, isStudent } = useAuth();
+  const { isAdmin } = useAuth();
   const { data: courses } = useFirestoreCollection<Course>('courses');
   const { data: users } = useFirestoreCollection<UserProfile>('users');
 
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [enrollingCourseId, setEnrollingCourseId] = useState<string | null>(null);
   const [newCourse, setNewCourse] = useState({
     title: '',
     description: '',
@@ -51,72 +43,33 @@ export default function CoursesView() {
   // If admin, they can see all users to assign as mentor (will auto-update role if needed)
   const mentorOptions = isAdmin ? users : mentors;
 
-  useEffect(() => {
-    if (isAddDialogOpen && isMentor && !isAdmin && profile?.uid) {
-      setNewCourse((prev) => ({ ...prev, mentorId: profile.uid }));
-    }
-  }, [isAddDialogOpen, isMentor, isAdmin, profile?.uid]);
-
-  const handleEnroll = async (course: Course) => {
-    if (!profile?.uid || !isStudent) return;
-    setEnrollingCourseId(course.id);
-    try {
-      const dupQ = query(
-        collection(db, 'enrollments'),
-        where('studentId', '==', profile.uid),
-        where('courseId', '==', course.id),
-      );
-      const existing = await getDocs(dupQ);
-      if (!existing.empty) {
-        toast.info('You are already enrolled in this course.');
-        return;
-      }
-      const payload: Omit<Enrollment, 'id'> = {
-        studentId: profile.uid,
-        studentName: profile.name,
-        courseId: course.id,
-        courseTitle: course.title,
-        mentorId: course.mentorId,
-        status: 'pending',
-        onboardedAt: Date.now(),
-        totalPaid: 0,
-        commissionEarned: 0,
-      };
-      await addDoc(collection(db, 'enrollments'), payload);
-      toast.success('Enrollment submitted.');
-    } catch (err) {
-      console.error(err);
-      toast.error('Could not enroll. Try again.');
-    } finally {
-      setEnrollingCourseId(null);
-    }
-  };
-
   const handleCreateCourse = async (e: React.FormEvent) => {
     e.preventDefault();
-    const mentorId =
-      isMentor && !isAdmin && profile?.uid ? profile.uid : newCourse.mentorId;
-    if (!newCourse.title || !mentorId || !newCourse.price) {
+    if (!newCourse.title || !newCourse.mentorId || !newCourse.price) {
       toast.error('Please fill in all required fields');
       return;
     }
 
-    const selectedMentor = mentors.find((m) => m.uid === mentorId);
+    const selectedMentor = users.find(m => m.uid === newCourse.mentorId);
 
     setIsSubmitting(true);
     try {
-      const courseRef = doc(collection(db, 'courses'));
-      const price = parseFloat(newCourse.price);
-      const commissionRate = parseFloat(newCourse.commissionRate);
-      await setDoc(courseRef, {
-        id: courseRef.id,
+      // If the selected user is not a mentor, update their role first
+      if (selectedMentor && selectedMentor.role !== 'mentor') {
+        await updateDoc(doc(db, 'users', selectedMentor.uid), { 
+          role: 'mentor',
+          kycStatus: 'not_started'
+        });
+      }
+
+      await addDoc(collection(db, 'courses'), {
         title: newCourse.title,
         description: newCourse.description,
-        mentorId,
-        mentorName: selectedMentor?.name || profile?.name || 'Unknown Mentor',
-        price,
-        commissionRate,
-        createdAt: Date.now(),
+        mentorId: newCourse.mentorId,
+        mentorName: selectedMentor?.name || 'Unknown Mentor',
+        price: parseFloat(newCourse.price),
+        commissionRate: parseFloat(newCourse.commissionRate),
+        createdAt: Date.now()
       });
       
       toast.success('Course created successfully');
@@ -145,14 +98,14 @@ export default function CoursesView() {
         </div>
         
         <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          {(isAdmin || isMentor) && (
-          <DialogTrigger asChild>
-            <Button className="gap-2">
-              <Plus className="w-4 h-4" />
-              Create Course
-            </Button>
-          </DialogTrigger>
-          )}
+          <DialogTrigger 
+            render={
+              <Button className="gap-2">
+                <Plus className="w-4 h-4" />
+                Create Course
+              </Button>
+            } 
+          />
           <DialogContent className="sm:max-w-[500px]">
             <form onSubmit={handleCreateCourse}>
               <DialogHeader>
@@ -183,11 +136,6 @@ export default function CoursesView() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label htmlFor="mentor">Assign Mentor</Label>
-                    {isMentor && !isAdmin ? (
-                      <p className="text-sm py-2 text-muted-foreground" id="mentor">
-                        {profile?.name || 'You'} (your mentor account)
-                      </p>
-                    ) : (
                     <Select 
                       value={newCourse.mentorId} 
                       onValueChange={(value) => setNewCourse({ ...newCourse, mentorId: value })}
@@ -203,7 +151,6 @@ export default function CoursesView() {
                         ))}
                       </SelectContent>
                     </Select>
-                    )}
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="price">Price (₦)</Label>
@@ -265,28 +212,8 @@ export default function CoursesView() {
                 </div>
               </div>
             </CardContent>
-            <CardFooter className="border-t pt-4 flex flex-col gap-2">
-              {isStudent && (
-                <Button
-                  className="w-full gap-2"
-                  onClick={() => handleEnroll(course)}
-                  disabled={enrollingCourseId === course.id}
-                >
-                  {enrollingCourseId === course.id ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Enrolling…
-                    </>
-                  ) : (
-                    'Enroll now'
-                  )}
-                </Button>
-              )}
-              {(isAdmin || isMentor) && (
-                <Button variant="outline" className="w-full">
-                  View details
-                </Button>
-              )}
+            <CardFooter className="border-t pt-4">
+              <Button className="w-full">View Details</Button>
             </CardFooter>
           </Card>
         ))}
@@ -294,12 +221,8 @@ export default function CoursesView() {
           <div className="col-span-full py-20 text-center border-2 border-dashed rounded-xl">
             <BookOpen className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold">No courses available</h3>
-            <p className="text-muted-foreground">
-              {isStudent ? 'Check back later for new courses.' : 'Start by creating your first educational program.'}
-            </p>
-            {(isAdmin || isMentor) && (
-              <Button className="mt-4" variant="outline" onClick={() => setIsAddDialogOpen(true)}>Create Course</Button>
-            )}
+            <p className="text-muted-foreground">Start by creating your first educational program.</p>
+            <Button className="mt-4" variant="outline">Create Course</Button>
           </div>
         )}
       </div>

@@ -253,13 +253,7 @@ export default function MentorsView() {
                         <TableCell className="font-semibold text-green-600">₦{commission.toLocaleString()}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() =>
-                                toast.info('Open Messages in the sidebar, then New conversation, to chat with this mentor.')
-                              }
-                            >
+                            <Button variant="ghost" size="icon" onClick={() => toast.info('Messaging feature coming soon')}>
                               <Mail className="w-4 h-4" />
                             </Button>
                             <Button variant="ghost" size="icon" onClick={() => toast.info('Mentor settings coming soon')}>
