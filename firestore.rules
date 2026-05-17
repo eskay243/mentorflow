@@ -2,42 +2,9 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ===============================================================
-    // Assumed Data Model
-    // ===============================================================
-    //
-    // Collection: users
-    // Fields: uid, email, name, role (admin|mentor|student), avatarUrl, createdAt, biodata (map)
-    //
-    // Collection: courses
-    // Fields: id, title, description, mentorId, mentorName, price, commissionRate
-    //
-    // Collection: enrollments
-    // Fields: id, studentId, studentName, courseId, courseTitle, mentorId, status, onboardedAt, totalPaid, commissionEarned
-    //
-    // Collection: payments
-    // Fields: id, enrollmentId, studentId, amount, date, status, receiptUrl
-    //
-    // Collection: payouts
-    // Fields: id, mentorId, amount, status, requestedAt, processedAt, receiptUrl
-    //
-    // Collection: sessions
-    // Fields: id, courseId, studentId, mentorId, date, status, feedback, rating
-    //
-    // Collection: chats
-    // Fields: id, participants (array), lastMessage, lastTimestamp
-    //
-    // Collection: chats/{chatId}/messages
-    // Fields: id, chatId, senderId, content, timestamp
-    //
-    // Collection: notifications
-    // Fields: id, userId, title, message, type, read, timestamp
-    //
-    // ===============================================================
-
-    // ===============================================================
+    // ================================================================
     // Helper Functions
-    // ===============================================================
+    // ================================================================
 
     function isAuthenticated() {
       return request.auth != null;
@@ -47,31 +14,37 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    // Admin: custom claim (set by claimAdminIfEligible Cloud Function)
+    // OR Firestore role == 'admin' as secondary fallback.
     function isAdmin() {
-      return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-         (request.auth.token.email == "eskay243@gmail.com" && request.auth.token.email_verified == true));
+      return isAuthenticated() && (
+        request.auth.token.admin == true ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
     }
 
     function isMentor() {
-      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'mentor';
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'mentor';
     }
 
     function isStudent() {
-      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student';
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student';
     }
 
-    function hasOnlyAllowedFields(fields) {
-      return request.resource.data.keys().hasOnly(fields);
+    function callerRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
     }
+
+    // ================================================================
+    // Domain Validators
+    // ================================================================
 
     function isValidEmail(email) {
-      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+      return email is string &&
+        email.matches("^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$");
     }
-
-    // ===============================================================
-    // Domain Validators
-    // ===============================================================
 
     function isValidUser(data) {
       return data.uid is string && data.uid.size() > 0 &&
@@ -87,67 +60,240 @@ service cloud.firestore {
 
     function isValidCourse(data) {
       return data.title is string && data.title.size() > 0 &&
-             data.mentorId is string && data.price is number && data.price >= 0 &&
-             data.commissionRate is number && data.commissionRate >= 0 && data.commissionRate <= 1;
+             data.mentorId is string && data.mentorId.size() > 0 &&
+             data.price is number && data.price >= 0 &&
+             data.commissionRate is number &&
+             data.commissionRate >= 0 && data.commissionRate <= 1;
     }
 
-    // ===============================================================
-    // Rules
-    // ===============================================================
+    function isValidEnrollment(data) {
+      return data.studentId is string && data.studentId.size() > 0 &&
+             data.courseId is string && data.courseId.size() > 0 &&
+             data.mentorId is string && data.mentorId.size() > 0 &&
+             data.status in ['pending', 'active', 'completed', 'cancelled'] &&
+             data.onboardedAt is number;
+    }
 
+    function isValidSession(data) {
+      return data.studentId is string && data.studentId.size() > 0 &&
+             data.mentorId is string && data.mentorId.size() > 0 &&
+             data.courseId is string && data.courseId.size() > 0 &&
+             data.date is number &&
+             data.status in ['scheduled', 'completed', 'cancelled'];
+    }
+
+    function isValidNotification(data) {
+      return data.userId is string && data.userId.size() > 0 &&
+             data.title is string && data.title.size() > 0 &&
+             data.message is string &&
+             data.type in ['session', 'payment', 'payout', 'message'] &&
+             data.read is bool &&
+             data.timestamp is number;
+    }
+
+    // ================================================================
+    // users
+    // ================================================================
     match /users/{userId} {
+      // Any authenticated user can read basic user profiles (needed for avatar lists, chat, etc.)
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data) && (request.resource.data.role != 'admin' || isAdmin());
-      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data) && 
-                    (request.resource.data.role == resource.data.role || isAdmin()) &&
-                    (isAdmin() || (isOwner(userId) && (request.resource.data.kycStatus == 'pending' || !('kycStatus' in request.resource.data) || request.resource.data.kycStatus == resource.data.kycStatus)));
-    }
 
-    match /courses/{courseId} {
-      allow read: if isAuthenticated();
-      allow create: if (isAdmin() || (isMentor() && request.resource.data.mentorId == request.auth.uid)) && isValidCourse(request.resource.data);
-      allow update: if (isAdmin() || (isMentor() && resource.data.mentorId == request.auth.uid)) && isValidCourse(request.resource.data);
+      // Create: owner creates own profile OR admin pre-registers a student/mentor.
+      // Nobody may create an admin profile through the client.
+      allow create: if isAuthenticated() &&
+        (isOwner(userId) || isAdmin()) &&
+        isValidUser(request.resource.data) &&
+        request.resource.data.role != 'admin';
+
+      // Update:
+      //   - Owners may update their own non-privileged fields (name, biodata, kycData for
+      //     mentor submission). They cannot change role or elevate kycStatus beyond 'pending'.
+      //   - Admin may update any field including role and kycStatus.
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (
+          isOwner(userId) &&
+          // Role must not change
+          request.resource.data.role == resource.data.role &&
+          // kycStatus: owner can only set to 'pending' or leave unchanged
+          (
+            !('kycStatus' in request.resource.data) ||
+            request.resource.data.kycStatus == resource.data.kycStatus ||
+            request.resource.data.kycStatus == 'pending'
+          )
+        )
+      ) && isValidUser(request.resource.data);
+
+      // Only admin can delete user profiles.
       allow delete: if isAdmin();
     }
 
+    // ================================================================
+    // courses
+    // ================================================================
+    match /courses/{courseId} {
+      allow read: if isAuthenticated();
+
+      // Mentors can only create courses they own; admin can create for any mentor.
+      allow create: if isValidCourse(request.resource.data) && (
+        isAdmin() ||
+        (isMentor() && request.resource.data.mentorId == request.auth.uid)
+      );
+
+      // Only the owning mentor or admin may update a course.
+      allow update: if isValidCourse(request.resource.data) && (
+        isAdmin() ||
+        (isMentor() && resource.data.mentorId == request.auth.uid)
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // ================================================================
+    // enrollments
+    // ================================================================
     match /enrollments/{enrollmentId} {
-      allow read: if isAuthenticated() && (isAdmin() || isOwner(resource.data.studentId) || isOwner(resource.data.mentorId));
-      allow create: if isAdmin() || isStudent();
-      allow update: if isAdmin() || isOwner(resource.data.mentorId);
+      // Admin sees all; mentor sees their enrollments; student sees their own.
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        isOwner(resource.data.studentId) ||
+        isOwner(resource.data.mentorId)
+      );
+
+      // Admin can create any enrollment.
+      // Student can self-enroll only in their own name.
+      allow create: if isValidEnrollment(request.resource.data) && (
+        isAdmin() ||
+        (isStudent() && request.resource.data.studentId == request.auth.uid)
+      );
+
+      // Admin can update any field (e.g., change status, adjust totalPaid).
+      // Mentor owning this enrollment can update status, feedback-related fields.
+      // Student can update limited payment/status fields on their own enrollment.
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        isOwner(resource.data.mentorId) ||
+        (isOwner(resource.data.studentId) &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['totalPaid', 'status']))
+      );
+
+      allow delete: if isAdmin();
     }
 
+    // ================================================================
+    // payments
+    // ================================================================
     match /payments/{paymentId} {
-      allow read: if isAuthenticated() && (isAdmin() || isOwner(resource.data.studentId));
-      allow create: if isAdmin() || isStudent();
+      allow read: if isAuthenticated() && (
+        isAdmin() || isOwner(resource.data.studentId)
+      );
+
+      // Admin or backend (via Cloud Functions) create payments.
+      // Students may initiate a payment record for themselves.
+      allow create: if isAdmin() || (
+        isStudent() && request.resource.data.studentId == request.auth.uid
+      );
+
+      // Only admin may update payment records (e.g., mark as success after webhook).
       allow update: if isAdmin();
+
+      allow delete: if isAdmin();
     }
 
+    // ================================================================
+    // payouts
+    // ================================================================
     match /payouts/{payoutId} {
-      allow read: if isAuthenticated() && (isAdmin() || isOwner(resource.data.mentorId));
-      allow create: if isMentor() && request.resource.data.mentorId == request.auth.uid;
+      allow read: if isAuthenticated() && (
+        isAdmin() || isOwner(resource.data.mentorId)
+      );
+
+      // Only the mentor themselves can request a payout.
+      allow create: if isMentor() &&
+        request.resource.data.mentorId == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.amount is number &&
+        request.resource.data.amount > 0;
+
+      // Only admin can process / update payouts.
       allow update: if isAdmin();
+
+      allow delete: if isAdmin();
     }
 
+    // ================================================================
+    // sessions
+    // ================================================================
     match /sessions/{sessionId} {
-      allow read: if isAuthenticated() && (isAdmin() || isOwner(resource.data.studentId) || isOwner(resource.data.mentorId));
-      allow create: if isAdmin() || isMentor() || isStudent();
-      allow update: if isAuthenticated() && (isAdmin() || isOwner(resource.data.studentId) || isOwner(resource.data.mentorId));
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        isOwner(resource.data.studentId) ||
+        isOwner(resource.data.mentorId)
+      );
+
+      // Mentor schedules sessions for their own students.
+      // Admin can create any session.
+      allow create: if isValidSession(request.resource.data) && (
+        isAdmin() ||
+        (isMentor() && request.resource.data.mentorId == request.auth.uid)
+      );
+
+      // Mentor may mark sessions complete/cancelled; student may submit feedback/rating.
+      // Admin may update anything.
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (isOwner(resource.data.mentorId) &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status'])) ||
+        (isOwner(resource.data.studentId) &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['feedback', 'rating']))
+      );
+
+      allow delete: if isAdmin();
     }
 
+    // ================================================================
+    // chats
+    // ================================================================
     match /chats/{chatId} {
-      allow read, write: if isAuthenticated() && request.auth.uid in resource.data.participants;
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.participants;
       allow create: if isAuthenticated() && request.auth.uid in request.resource.data.participants;
+      allow update: if isAuthenticated() && request.auth.uid in resource.data.participants;
+      allow delete: if isAdmin();
     }
 
     match /chats/{chatId}/messages/{messageId} {
-      allow read: if isAuthenticated() && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
-      allow create: if isAuthenticated() && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants && request.resource.data.senderId == request.auth.uid;
+      allow read: if isAuthenticated() &&
+        request.auth.uid in
+          get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+
+      allow create: if isAuthenticated() &&
+        request.auth.uid in
+          get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
+        request.resource.data.senderId == request.auth.uid &&
+        request.resource.data.content is string &&
+        request.resource.data.timestamp is number;
+
+      allow delete: if isAdmin();
     }
 
+    // ================================================================
+    // notifications
+    // ================================================================
     match /notifications/{notificationId} {
+      // Each user can only read their own notifications.
       allow read: if isAuthenticated() && isOwner(resource.data.userId);
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated() && isOwner(resource.data.userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+
+      // Only admin (or server-side Cloud Functions with admin SDK) creates notifications.
+      allow create: if isAdmin() && isValidNotification(request.resource.data);
+
+      // Users can only mark their own notifications as read.
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+
+      allow delete: if isAdmin();
     }
   }
 }
