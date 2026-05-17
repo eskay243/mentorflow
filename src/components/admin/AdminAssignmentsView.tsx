@@ -33,6 +33,7 @@ import { Plus, Link2, Loader2, ClipboardList } from 'lucide-react';
 import { collection, doc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { toast } from 'sonner';
+import AdminPaymentImportView from './AdminPaymentImportView';
 
 export default function AdminAssignmentsView() {
   const { data: users } = useFirestoreCollection<UserProfile>('users');
@@ -207,6 +208,12 @@ export default function AdminAssignmentsView() {
           </DialogContent>
         </Dialog>
       </div>
+
+      <AdminPaymentImportView
+        users={users}
+        courses={courses}
+        enrollments={enrollments}
+      />
 
       {/* All enrollments table */}
       <Card>

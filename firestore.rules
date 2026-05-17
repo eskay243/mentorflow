@@ -209,17 +209,40 @@ service cloud.firestore {
         isAdmin() || isOwner(resource.data.mentorId)
       );
 
-      // Only the mentor themselves can request a payout.
-      allow create: if isMentor() &&
+      // Admin can import/process payouts; mentors can only request their own pending payout.
+      allow create: if isAdmin() || (
+        isMentor() &&
         request.resource.data.mentorId == request.auth.uid &&
         request.resource.data.status == 'pending' &&
         request.resource.data.amount is number &&
-        request.resource.data.amount > 0;
+        request.resource.data.amount > 0
+      );
 
       // Only admin can process / update payouts.
       allow update: if isAdmin();
 
       allow delete: if isAdmin();
+    }
+
+    // ================================================================
+    // imports
+    // ================================================================
+    match /imports/{importId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    // ================================================================
+    // payment tracker summaries
+    // ================================================================
+    match /paymentTrackerSummaries/{summaryId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    // ================================================================
+    // student record import metadata
+    // ================================================================
+    match /studentRecordImports/{recordId} {
+      allow read, create, update, delete: if isAdmin();
     }
 
     // ================================================================
