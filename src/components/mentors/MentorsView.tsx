@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Plus, MoreVertical, Mail, Loader2 } from 'lucide-react';
+import { Plus, MoreVertical, Mail, Loader2, Users } from 'lucide-react';
 import { 
   Dialog, 
   DialogContent, 
@@ -25,7 +25,11 @@ import { toast } from 'sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Check, X, Eye } from 'lucide-react';
 
+import { useAuth } from '@/context/AuthContext';
+import { cn } from '@/lib/utils';
+
 export default function MentorsView() {
+  const { profile, isStudent, isAdmin } = useAuth();
   const { data: users } = useFirestoreCollection<UserProfile>('users');
   const { data: enrollments } = useFirestoreCollection<Enrollment>('enrollments');
   
@@ -36,6 +40,62 @@ export default function MentorsView() {
 
   const mentors = users.filter(u => u.role === 'mentor' && u.kycStatus === 'verified');
   const pendingKyc = users.filter(u => u.role === 'mentor' && u.kycStatus === 'pending');
+
+  // For students, only show mentors they are enrolled with
+  const studentEnrollments = enrollments.filter(e => e.studentId === profile?.uid);
+  const myMentors = mentors.filter(m => studentEnrollments.some(e => e.mentorId === m.uid));
+
+  if (isStudent) {
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col gap-2">
+          <h1 className="text-3xl font-serif font-bold tracking-tight text-gray-900">My Mentors</h1>
+          <p className="text-muted-foreground">Connect and learn from your assigned mentors.</p>
+        </div>
+
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {myMentors.map((mentor) => (
+            <Card key={mentor.uid} className="border-none shadow-lg bg-white/80 backdrop-blur-sm overflow-hidden group hover:shadow-xl transition-all">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-4">
+                  <Avatar className="w-16 h-16 border-2 border-primary/10">
+                    <AvatarImage src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${mentor.name}`} />
+                    <AvatarFallback>{mentor.name.charAt(0)}</AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-bold text-lg truncate group-hover:text-primary transition-colors">{mentor.name}</h3>
+                    <p className="text-sm text-muted-foreground truncate">{mentor.email}</p>
+                    <Badge variant="secondary" className="mt-2 rounded-full text-[10px] uppercase font-bold tracking-wider">Verified Mentor</Badge>
+                  </div>
+                </div>
+                <div className="mt-6 flex gap-2">
+                  <Button className="flex-1 rounded-xl gap-2" onClick={() => toast.info('Chat feature coming soon')}>
+                    <Mail className="w-4 h-4" />
+                    Message
+                  </Button>
+                  <Button variant="outline" className="flex-1 rounded-xl" onClick={() => toast.info('Profile details coming soon')}>
+                    View Profile
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+          {myMentors.length === 0 && (
+            <Card className="md:col-span-2 lg:col-span-3 border-dashed border-2 bg-transparent">
+              <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+                <Users className="w-12 h-12 text-muted-foreground mb-4 opacity-20" />
+                <h3 className="text-lg font-semibold">No Mentors Yet</h3>
+                <p className="text-muted-foreground max-w-sm mx-auto mt-2">
+                  You haven't enrolled in any courses yet. Browse our catalog to find a mentor that suits your needs.
+                </p>
+                <Button className="mt-6 rounded-xl" variant="outline">Browse Courses</Button>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   const handleAddMentor = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,12 +159,14 @@ export default function MentorsView() {
         </div>
         
         <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className="gap-2">
-              <Plus className="w-4 h-4" />
-              Add New Mentor
-            </Button>
-          </DialogTrigger>
+          <DialogTrigger 
+            render={
+              <Button className="gap-2">
+                <Plus className="w-4 h-4" />
+                Add New Mentor
+              </Button>
+            } 
+          />
           <DialogContent>
             <form onSubmit={handleAddMentor}>
               <DialogHeader>
@@ -243,11 +305,13 @@ export default function MentorsView() {
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
                           <Dialog>
-                            <DialogTrigger asChild>
-                              <Button variant="outline" size="sm" onClick={() => setSelectedKycMentor(mentor)}>
-                                <Eye className="w-4 h-4 mr-1" /> View
-                              </Button>
-                            </DialogTrigger>
+                            <DialogTrigger 
+                              render={
+                                <Button variant="outline" size="sm" onClick={() => setSelectedKycMentor(mentor)}>
+                                  <Eye className="w-4 h-4 mr-1" /> View
+                                </Button>
+                              } 
+                            />
                             <DialogContent className="sm:max-w-[600px]">
                               <DialogHeader>
                                 <DialogTitle>KYC Details: {mentor.name}</DialogTitle>

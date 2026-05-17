@@ -22,7 +22,10 @@ import { collection, addDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { toast } from 'sonner';
 
+import { useAuth } from '@/context/AuthContext';
+
 export default function StudentsView() {
+  const { profile, isAdmin, isMentor } = useAuth();
   const { data: users } = useFirestoreCollection<UserProfile>('users');
   const { data: enrollments } = useFirestoreCollection<Enrollment>('enrollments');
 
@@ -30,7 +33,17 @@ export default function StudentsView() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [newStudent, setNewStudent] = useState({ name: '', email: '' });
 
-  const students = users.filter(u => u.role === 'student');
+  // Filter students: 
+  // Admin sees all students
+  // Mentor sees only students enrolled in their courses
+  const students = users.filter(u => {
+    if (u.role !== 'student') return false;
+    if (isAdmin) return true;
+    if (isMentor) {
+      return enrollments.some(e => e.studentId === u.uid && e.mentorId === profile?.uid);
+    }
+    return false;
+  });
 
   const handleOnboardStudent = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,54 +81,58 @@ export default function StudentsView() {
           <p className="text-muted-foreground">Monitor student progress and onboarding status.</p>
         </div>
         
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className="gap-2">
-              <Plus className="w-4 h-4" />
-              Onboard Student
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <form onSubmit={handleOnboardStudent}>
-              <DialogHeader>
-                <DialogTitle>Onboard New Student</DialogTitle>
-                <DialogDescription>
-                  Enter the student's details to create their profile. They can sign in later to access their dashboard.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="name">Full Name</Label>
-                  <Input 
-                    id="name" 
-                    placeholder="e.g. Jane Smith" 
-                    value={newStudent.name}
-                    onChange={(e) => setNewStudent({ ...newStudent, name: e.target.value })}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="email">Email Address</Label>
-                  <Input 
-                    id="email" 
-                    type="email" 
-                    placeholder="student@example.com" 
-                    value={newStudent.email}
-                    onChange={(e) => setNewStudent({ ...newStudent, email: e.target.value })}
-                  />
-                </div>
-              </div>
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setIsAddDialogOpen(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={isSubmitting}>
-                  {isSubmitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+        {isAdmin && (
+          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+            <DialogTrigger 
+              render={
+                <Button className="gap-2">
+                  <Plus className="w-4 h-4" />
                   Onboard Student
                 </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+              } 
+            />
+            <DialogContent>
+              <form onSubmit={handleOnboardStudent}>
+                <DialogHeader>
+                  <DialogTitle>Onboard New Student</DialogTitle>
+                  <DialogDescription>
+                    Enter the student's details to create their profile. They can sign in later to access their dashboard.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="name">Full Name</Label>
+                    <Input 
+                      id="name" 
+                      placeholder="e.g. Jane Smith" 
+                      value={newStudent.name}
+                      onChange={(e) => setNewStudent({ ...newStudent, name: e.target.value })}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="email">Email Address</Label>
+                    <Input 
+                      id="email" 
+                      type="email" 
+                      placeholder="student@example.com" 
+                      value={newStudent.email}
+                      onChange={(e) => setNewStudent({ ...newStudent, email: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setIsAddDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={isSubmitting}>
+                    {isSubmitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Onboard Student
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
 
       <div className="flex gap-4">

@@ -13,12 +13,14 @@ import {
   X,
   ChevronRight,
   CheckCircle,
-  Rocket
+  Rocket,
+  Calendar
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
 interface SidebarItemProps {
@@ -65,16 +67,16 @@ export default function DashboardLayout({
 
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'mentor', 'student'] },
+    { id: 'sessions', label: userRole === 'student' ? 'My Sessions' : 'Sessions', icon: Calendar, roles: ['mentor', 'student'] },
     { id: 'students', label: 'Students', icon: Users, roles: ['admin', 'mentor'] },
-    { id: 'mentors', label: 'Mentors', icon: Users, roles: ['admin'] },
-    { id: 'courses', label: 'Courses', icon: BookOpen, roles: ['admin', 'mentor', 'student'] },
+    { id: 'mentors', label: userRole === 'student' ? 'My Mentors' : 'Mentors', icon: Users, roles: ['admin', 'student'] },
+    { id: 'courses', label: userRole === 'student' ? 'Browse Courses' : 'Courses', icon: BookOpen, roles: ['admin', 'mentor', 'student'] },
     { id: 'payments', label: 'Payments', icon: CreditCard, roles: ['admin', 'student'] },
     { id: 'commissions', label: 'Commissions', icon: CreditCard, roles: ['mentor'] },
     { id: 'payouts', label: 'Payouts', icon: CreditCard, roles: ['admin', 'mentor'] },
-    { id: 'kyc', label: 'Onboarding & KYC', icon: CheckCircle, roles: ['mentor', 'student'] },
-    { id: 'onboarding', label: 'Onboarding Guide', icon: Rocket, roles: ['student'] },
     { id: 'messages', label: 'Messages', icon: MessageSquare, roles: ['admin', 'mentor', 'student'] },
     { id: 'notifications', label: 'Notifications', icon: Bell, roles: ['admin', 'mentor', 'student'] },
+    { id: 'settings', label: 'Settings', icon: Settings, roles: ['admin', 'mentor', 'student'] },
   ];
 
   const filteredItems = menuItems.filter(item => item.roles.includes(userRole));
@@ -120,7 +122,17 @@ export default function DashboardLayout({
               <AvatarFallback>{userName.charAt(0)}</AvatarFallback>
             </Avatar>
             <div className="flex flex-col min-w-0">
-              <span className="text-sm font-semibold truncate">{userName}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold truncate">{userName}</span>
+                <Badge variant="outline" className={cn(
+                  "text-[10px] px-1.5 py-0 h-4 uppercase font-bold",
+                  userRole === 'admin' && "bg-red-50 text-red-700 border-red-200",
+                  userRole === 'mentor' && "bg-blue-50 text-blue-700 border-blue-200",
+                  userRole === 'student' && "bg-green-50 text-green-700 border-green-200"
+                )}>
+                  {userRole}
+                </Badge>
+              </div>
               <span className="text-xs text-muted-foreground truncate">{userEmail}</span>
             </div>
           </div>
@@ -151,7 +163,7 @@ export default function DashboardLayout({
               <Bell className="w-5 h-5" />
               <span className="absolute top-2 right-2 w-2 h-2 bg-destructive rounded-full" />
             </Button>
-            <Button variant="ghost" size="icon">
+            <Button variant="ghost" size="icon" onClick={() => setActiveTab('settings')}>
               <Settings className="w-5 h-5" />
             </Button>
           </div>

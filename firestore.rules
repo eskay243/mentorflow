@@ -7,7 +7,7 @@ service cloud.firestore {
     // ===============================================================
     //
     // Collection: users
-    // Fields: uid, email, name, role (admin|mentor|student), avatarUrl, createdAt
+    // Fields: uid, email, name, role (admin|mentor|student), avatarUrl, createdAt, biodata (map)
     //
     // Collection: courses
     // Fields: id, title, description, mentorId, mentorName, price, commissionRate
@@ -81,11 +81,12 @@ service cloud.firestore {
              data.createdAt is number &&
              (!('kycStatus' in data) || data.kycStatus in ['not_started', 'pending', 'verified', 'rejected']) &&
              (!('onboardingCompleted' in data) || data.onboardingCompleted is bool) &&
-             (!('onboardingStep' in data) || data.onboardingStep is number);
+             (!('onboardingStep' in data) || data.onboardingStep is number) &&
+             (!('biodata' in data) || data.biodata is map);
     }
 
     function isValidCourse(data) {
-      return data.id is string && data.title is string && data.title.size() > 0 &&
+      return data.title is string && data.title.size() > 0 &&
              data.mentorId is string && data.price is number && data.price >= 0 &&
              data.commissionRate is number && data.commissionRate >= 0 && data.commissionRate <= 1;
     }
@@ -104,7 +105,7 @@ service cloud.firestore {
 
     match /courses/{courseId} {
       allow read: if isAuthenticated();
-      allow create: if (isAdmin() || isMentor()) && isValidCourse(request.resource.data) && request.resource.data.mentorId == request.auth.uid;
+      allow create: if (isAdmin() || (isMentor() && request.resource.data.mentorId == request.auth.uid)) && isValidCourse(request.resource.data);
       allow update: if (isAdmin() || (isMentor() && resource.data.mentorId == request.auth.uid)) && isValidCourse(request.resource.data);
       allow delete: if isAdmin();
     }

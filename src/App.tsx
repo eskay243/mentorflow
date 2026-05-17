@@ -16,9 +16,8 @@ import CoursesView from './components/courses/CoursesView';
 import PaymentsView from './components/payments/PaymentsView';
 import PayoutsView from './components/payouts/PayoutsView';
 import NotificationsView from './components/notifications/NotificationsView';
-import KYCView from './components/mentor/KYCView';
-import StudentKYCView from './components/student/StudentKYCView';
-import OnboardingGuide from './components/student/OnboardingGuide';
+import SettingsView from './components/settings/SettingsView';
+import SessionsView from './components/sessions/SessionsView';
 import { Toaster } from '@/components/ui/sonner';
 import { auth } from './lib/firebase';
 import { signOut } from 'firebase/auth';
@@ -42,14 +41,16 @@ function AppContent() {
     switch (activeTab) {
       case 'dashboard':
         if (isAdmin) return <AdminDashboard />;
-        if (isMentor) return <MentorDashboard onCompleteKyc={() => setActiveTab('kyc')} />;
+        if (isMentor) return <MentorDashboard onCompleteKyc={() => setActiveTab('settings')} />;
         if (isStudent) return (
           <StudentDashboard 
-            onStartOnboarding={() => setActiveTab('onboarding')} 
-            onStartKyc={() => setActiveTab('kyc')} 
+            onStartOnboarding={() => setActiveTab('settings')} 
+            onStartKyc={() => setActiveTab('settings')} 
           />
         );
         return null;
+      case 'sessions':
+        return <SessionsView />;
       case 'messages':
         return <ChatModule />;
       case 'mentors':
@@ -62,13 +63,8 @@ function AppContent() {
         return <PaymentsView />;
       case 'payouts':
         return <PayoutsView />;
-      case 'kyc':
-        if (isMentor) return <KYCView />;
-        if (isStudent) return <StudentKYCView />;
-        return null;
-      case 'onboarding':
-        if (isStudent) return <OnboardingGuide onComplete={() => setActiveTab('dashboard')} />;
-        return null;
+      case 'settings':
+        return <SettingsView />;
       case 'notifications':
         return <NotificationsView />;
       case 'commissions':

@@ -12,6 +12,16 @@ export interface UserProfile {
   kycData?: MentorKYC;
   onboardingCompleted?: boolean;
   onboardingStep?: number;
+  biodata?: Biodata;
+}
+
+export interface Biodata {
+  phoneNumber?: string;
+  address?: string;
+  dateOfBirth?: string;
+  gender?: string;
+  stateOfOrigin?: string;
+  bio?: string;
 }
 
 export interface MentorKYC {

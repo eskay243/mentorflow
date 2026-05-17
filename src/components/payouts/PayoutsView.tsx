@@ -73,12 +73,14 @@ export default function PayoutsView() {
         </div>
         {!isAdmin && (
           <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-            <DialogTrigger asChild>
-              <Button className="gap-2">
-                <DollarSign className="w-4 h-4" />
-                Request Payout
-              </Button>
-            </DialogTrigger>
+            <DialogTrigger 
+              render={
+                <Button className="gap-2">
+                  <DollarSign className="w-4 h-4" />
+                  Request Payout
+                </Button>
+              } 
+            />
             <DialogContent>
               <form onSubmit={handleRequestPayout}>
                 <DialogHeader>

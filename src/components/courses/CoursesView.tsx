@@ -18,11 +18,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { collection, addDoc } from 'firebase/firestore';
+import { collection, addDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { toast } from 'sonner';
 
+import { useAuth } from '@/context/AuthContext';
+
 export default function CoursesView() {
+  const { isAdmin } = useAuth();
   const { data: courses } = useFirestoreCollection<Course>('courses');
   const { data: users } = useFirestoreCollection<UserProfile>('users');
 
@@ -37,6 +40,8 @@ export default function CoursesView() {
   });
 
   const mentors = users.filter(u => u.role === 'mentor');
+  // If admin, they can see all users to assign as mentor (will auto-update role if needed)
+  const mentorOptions = isAdmin ? users : mentors;
 
   const handleCreateCourse = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,10 +50,18 @@ export default function CoursesView() {
       return;
     }
 
-    const selectedMentor = mentors.find(m => m.uid === newCourse.mentorId);
+    const selectedMentor = users.find(m => m.uid === newCourse.mentorId);
 
     setIsSubmitting(true);
     try {
+      // If the selected user is not a mentor, update their role first
+      if (selectedMentor && selectedMentor.role !== 'mentor') {
+        await updateDoc(doc(db, 'users', selectedMentor.uid), { 
+          role: 'mentor',
+          kycStatus: 'not_started'
+        });
+      }
+
       await addDoc(collection(db, 'courses'), {
         title: newCourse.title,
         description: newCourse.description,
@@ -85,12 +98,14 @@ export default function CoursesView() {
         </div>
         
         <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className="gap-2">
-              <Plus className="w-4 h-4" />
-              Create Course
-            </Button>
-          </DialogTrigger>
+          <DialogTrigger 
+            render={
+              <Button className="gap-2">
+                <Plus className="w-4 h-4" />
+                Create Course
+              </Button>
+            } 
+          />
           <DialogContent className="sm:max-w-[500px]">
             <form onSubmit={handleCreateCourse}>
               <DialogHeader>
@@ -129,8 +144,10 @@ export default function CoursesView() {
                         <SelectValue placeholder="Select mentor" />
                       </SelectTrigger>
                       <SelectContent>
-                        {mentors.map((m) => (
-                          <SelectItem key={m.uid} value={m.uid}>{m.name}</SelectItem>
+                        {mentorOptions.map((m) => (
+                          <SelectItem key={m.uid} value={m.uid}>
+                            {m.name} {m.role !== 'mentor' ? `(${m.role})` : ''}
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>

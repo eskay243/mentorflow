@@ -16,6 +16,9 @@ export function useFirestoreCollection<T = DocumentData>(
   const [data, setData] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const refresh = () => setRefreshKey(prev => prev + 1);
 
   useEffect(() => {
     setLoading(true);
@@ -39,7 +42,7 @@ export function useFirestoreCollection<T = DocumentData>(
     );
 
     return () => unsubscribe();
-  }, [collectionName, JSON.stringify(constraints)]);
+  }, [collectionName, refreshKey]);
 
-  return { data, loading, error };
+  return { data, loading, error, refresh };
 }

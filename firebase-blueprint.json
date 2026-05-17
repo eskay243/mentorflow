@@ -29,7 +29,18 @@
           }
         },
         "onboardingCompleted": { "type": "boolean" },
-        "onboardingStep": { "type": "number" }
+        "onboardingStep": { "type": "number" },
+        "biodata": {
+          "type": "object",
+          "properties": {
+            "phoneNumber": { "type": "string" },
+            "address": { "type": "string" },
+            "dateOfBirth": { "type": "string" },
+            "gender": { "type": "string" },
+            "stateOfOrigin": { "type": "string" },
+            "bio": { "type": "string" }
+          }
+        }
       },
       "required": ["uid", "email", "name", "role", "createdAt"]
     },

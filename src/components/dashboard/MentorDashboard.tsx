@@ -63,8 +63,8 @@ export default function MentorDashboard({ onCompleteKyc }: { onCompleteKyc: () =
             <div className="flex items-center gap-3 text-yellow-800">
               <AlertTriangle className="w-5 h-5" />
               <div>
-                <p className="font-semibold text-sm">Onboarding Incomplete</p>
-                <p className="text-xs">Please complete your KYC verification to enable payouts and full account features.</p>
+                <p className="font-semibold text-sm">Profile Incomplete</p>
+                <p className="text-xs">Please update your biodata and KYC information in settings to enable payouts and full account features.</p>
               </div>
             </div>
             <Button 
@@ -73,7 +73,7 @@ export default function MentorDashboard({ onCompleteKyc }: { onCompleteKyc: () =
               className="bg-white border-yellow-300 text-yellow-800 hover:bg-yellow-100"
               onClick={onCompleteKyc}
             >
-              Complete KYC
+              Update Profile
             </Button>
           </CardContent>
         </Card>
