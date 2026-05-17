@@ -6,11 +6,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { DollarSign, Users, CheckCircle, Clock, ShieldCheck, Check, X, RefreshCw } from 'lucide-react';
-import { doc, updateDoc } from 'firebase/firestore';
+import { DollarSign, Users, CheckCircle, Clock, ShieldCheck, Check, X, RefreshCw, Loader2 } from 'lucide-react';
+import { doc, updateDoc, addDoc, collection } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { toast } from 'sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Label } from '@/components/ui/label';
 
 export default function AdminDashboard() {
   const { data: payouts, refresh: refreshPayouts } = useFirestoreCollection<Payout>('payouts');
@@ -19,11 +20,53 @@ export default function AdminDashboard() {
 
   const [userSearch, setUserSearch] = useState('');
   
+  const [isAssigning, setIsAssigning] = useState(false);
+  const [assignmentData, setAssignmentData] = useState({
+    studentId: '',
+    mentorId: '',
+    courseTitle: 'General Mentorship'
+  });
+
   const handleRefreshAll = () => {
     refreshPayouts();
     refreshUsers();
     refreshEnrollments();
     toast.success('Data refreshed');
+  };
+
+  const handleAssignStudent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!assignmentData.studentId || !assignmentData.mentorId) {
+      toast.error('Please select both a student and a mentor');
+      return;
+    }
+
+    setIsAssigning(true);
+    try {
+      const student = users.find(u => u.uid === assignmentData.studentId);
+      const mentor = users.find(u => u.uid === assignmentData.mentorId);
+
+      await addDoc(collection(db, 'enrollments'), {
+        studentId: assignmentData.studentId,
+        studentName: student?.name || 'Unknown',
+        mentorId: assignmentData.mentorId,
+        mentorName: mentor?.name || 'Unknown',
+        courseTitle: assignmentData.courseTitle,
+        status: 'active',
+        onboardedAt: Date.now(),
+        commissionEarned: 0,
+        totalPaid: 0
+      });
+
+      toast.success('Student assigned to mentor successfully');
+      refreshEnrollments();
+      setAssignmentData({ ...assignmentData, studentId: '', mentorId: '' });
+    } catch (error) {
+      console.error('Error assigning student:', error);
+      toast.error('Failed to assign student');
+    } finally {
+      setIsAssigning(false);
+    }
   };
   
   const mentorUsers = users.filter(u => u.role === 'mentor');
@@ -141,9 +184,101 @@ export default function AdminDashboard() {
         <TabsList className="bg-muted/50 p-1 rounded-xl">
           <TabsTrigger value="payouts" className="rounded-lg">Payout Requests</TabsTrigger>
           <TabsTrigger value="kyc" className="rounded-lg">KYC Approvals ({pendingKyc.length})</TabsTrigger>
+          <TabsTrigger value="assignments" className="rounded-lg">Assignments</TabsTrigger>
           <TabsTrigger value="users" className="rounded-lg">Users Management</TabsTrigger>
           <TabsTrigger value="performance" className="rounded-lg">Performance</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="assignments" className="mt-6">
+          <div className="grid md:grid-cols-3 gap-6">
+            <Card className="md:col-span-1 border-none shadow-xl bg-white/80 backdrop-blur-sm">
+              <CardHeader>
+                <CardTitle className="font-serif">New Assignment</CardTitle>
+                <p className="text-xs text-muted-foreground">Link a student to a mentor.</p>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleAssignStudent} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Select Student</Label>
+                    <select 
+                      className="w-full h-10 px-3 rounded-xl border bg-background text-sm"
+                      value={assignmentData.studentId}
+                      onChange={(e) => setAssignmentData({ ...assignmentData, studentId: e.target.value })}
+                    >
+                      <option value="">-- Select Student --</option>
+                      {studentUsers.map(s => (
+                        <option key={s.uid} value={s.uid}>{s.name} ({s.email})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Select Mentor</Label>
+                    <select 
+                      className="w-full h-10 px-3 rounded-xl border bg-background text-sm"
+                      value={assignmentData.mentorId}
+                      onChange={(e) => setAssignmentData({ ...assignmentData, mentorId: e.target.value })}
+                    >
+                      <option value="">-- Select Mentor --</option>
+                      {mentorUsers.map(m => (
+                        <option key={m.uid} value={m.uid}>{m.name} ({m.email})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Course/Program Title</Label>
+                    <Input 
+                      placeholder="e.g. Backend Development"
+                      value={assignmentData.courseTitle}
+                      onChange={(e) => setAssignmentData({ ...assignmentData, courseTitle: e.target.value })}
+                      className="rounded-xl"
+                    />
+                  </div>
+                  <Button type="submit" className="w-full rounded-xl" disabled={isAssigning}>
+                    {isAssigning && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Assign Mentorship
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+
+            <Card className="md:col-span-2 border-none shadow-xl bg-white/80 backdrop-blur-sm overflow-hidden">
+              <CardHeader>
+                <CardTitle className="font-serif">Active Assignments</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/30">
+                      <TableHead>Student</TableHead>
+                      <TableHead>Mentor</TableHead>
+                      <TableHead>Course</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {enrollments.map((en) => (
+                      <TableRow key={en.id}>
+                        <TableCell className="font-medium">{en.studentName}</TableCell>
+                        <TableCell>{en.mentorName}</TableCell>
+                        <TableCell>{en.courseTitle}</TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="ghost" size="sm" className="text-destructive hover:bg-destructive/10">Remove</Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {enrollments.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center py-12 text-muted-foreground">
+                          No active mentorship assignments found.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
 
         <TabsContent value="users" className="mt-6">
           <Card className="border-none shadow-xl bg-white/80 backdrop-blur-sm overflow-hidden">
