@@ -59,6 +59,14 @@ export interface Enrollment {
   onboardedAt: number;
   totalPaid: number;
   commissionEarned: number;
+  cohort?: string;
+  amountDue?: number;
+  amountDisbursed?: number;
+  sourceImportId?: string;
+  sourceSheet?: string;
+  sourceRowNumber?: number;
+  trackerRowNumber?: number | null;
+  updatedAt?: number;
 }
 
 export interface Payment {
@@ -80,6 +88,51 @@ export interface Payout {
   requestedAt: number;
   processedAt?: number;
   receiptUrl?: string;
+}
+
+export interface PaymentTrackerSummary {
+  id: string;
+  cohort: string;
+  courseId: string;
+  courseTitle: string;
+  mentorId: string;
+  mentorName: string;
+  courseStatus: string;
+  numberOfStudents: number;
+  startDate: number;
+  dueDate: number;
+  totalAmountPaid: number;
+  amountDue: number;
+  amountDisbursed: number;
+  paymentStatus: string;
+  commissionRate: number;
+  sourceImportId: string;
+  importedAt: number;
+  updatedAt?: number;
+}
+
+export interface StudentRecordImportMetadata {
+  id: string;
+  sourceImportId: string;
+  studentId: string;
+  studentName: string;
+  studentEmail: string;
+  phoneNumber?: string;
+  courseId: string;
+  courseTitle: string;
+  mentorId: string;
+  mentorName: string;
+  onboardingDate: number;
+  courseStatus: string;
+  amountPaid: number;
+  paymentStatus: string;
+  sourceSheet?: string;
+  sourceRowNumber?: number;
+  trackerSourceSheet?: string | null;
+  trackerRowNumber?: number | null;
+  cohort?: string;
+  importedAt: number;
+  updatedAt?: number;
 }
 
 export interface Session {

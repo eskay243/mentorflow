@@ -4,8 +4,9 @@ import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { defineString } from 'firebase-functions/params';
 import { firebaseApp, firestoreDb, firestoreDatabaseId } from './db.js';
 import { paystackWebhook, createPaystackCheckout } from './paystack.js';
+import { syncMentorPaymentSheet } from './paymentTrackerImport.js';
 
-export { paystackWebhook, createPaystackCheckout };
+export { paystackWebhook, createPaystackCheckout, syncMentorPaymentSheet };
 
 const adminBootstrapEmail = defineString('ADMIN_BOOTSTRAP_EMAIL', { default: '' });
 
