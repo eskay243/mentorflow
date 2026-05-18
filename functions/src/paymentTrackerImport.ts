@@ -40,9 +40,15 @@ interface ValidationError {
   message: string;
 }
 
+interface ImportReviewIssue extends ValidationError {
+  code: string;
+  blocking: boolean;
+}
+
 interface StudentRecordRow {
   rowNumber: number;
   sourceSheet: string;
+  studentType?: string;
   name: string;
   course: string;
   mentorName: string;
@@ -52,6 +58,13 @@ interface StudentRecordRow {
   courseStatus: string;
   amountPaid: number;
   paymentStatus: string;
+  trackerSourceSheet?: string | null;
+  trackerRowNumber?: number | null;
+  cohort?: string;
+  amountDue?: number;
+  amountDisbursed?: number;
+  correctedFields?: string[];
+  originalStudentRow?: Partial<StudentRecordRow>;
 }
 
 type Field = keyof (StudentRow & AggregateRow);
@@ -102,6 +115,7 @@ const HEADER_ALIASES: Record<string, Field> = {
   numberofstudents: 'numberOfStudents',
   students: 'numberOfStudents',
   noofstudents: 'numberOfStudents',
+  numstudents: 'numberOfStudents',
   startdate: 'startDate',
   start: 'startDate',
   duedate: 'dueDate',
@@ -122,6 +136,8 @@ const HEADER_ALIASES: Record<string, Field> = {
   courseprice: 'coursePrice',
   price: 'coursePrice',
   commissionrate: 'commissionRate',
+  commission37pct: 'amountDue',
+  balancedue: 'amountDue',
 };
 
 type StudentRecordField = keyof Omit<StudentRecordRow, 'rowNumber'>;
@@ -140,6 +156,7 @@ const STUDENT_RECORD_HEADERS: Record<string, StudentRecordField> = {
   name: 'name',
   student: 'name',
   studentname: 'name',
+  studenttype: 'studentType',
   course: 'course',
   coursename: 'course',
   mentor: 'mentorName',
@@ -151,6 +168,7 @@ const STUDENT_RECORD_HEADERS: Record<string, StudentRecordField> = {
   phone: 'phoneNumber',
   number: 'phoneNumber',
   onboardingdate: 'onboardingDate',
+  enrollmentdate: 'onboardingDate',
   date: 'onboardingDate',
   coursestatus: 'courseStatus',
   status: 'courseStatus',
@@ -159,6 +177,11 @@ const STUDENT_RECORD_HEADERS: Record<string, StudentRecordField> = {
   paid: 'amountPaid',
   paymentstatus: 'paymentStatus',
 };
+
+const UNASSIGNED_MENTOR_NAME = 'Unassigned Mentor';
+const UNASSIGNED_MENTOR_EMAIL = 'unassigned.mentor@imported.mentorflow.local';
+const REVIEWED_IMPORT_FUNCTION_VERSION = 'commit-reviewed-import-diagnostics-v1';
+type ReviewedImportPhase = 'auth-admin-lookup' | 'payload-parsing' | 'write-construction' | 'dry-run' | 'firestore-commit';
 
 export const syncMentorPaymentSheet = onCall(async (request) => {
   const uid = request.auth?.uid;
@@ -169,6 +192,7 @@ export const syncMentorPaymentSheet = onCall(async (request) => {
   const isAdmin = request.auth?.token.admin === true || userSnap.data()?.role === 'admin';
   if (!isAdmin) throw new HttpsError('permission-denied', 'Only admins can sync payment tracker sheets');
 
+  const singleWorkbookUrl = String(request.data?.singleWorkbookUrl ?? '').trim();
   const trackerSheetUrl = String(request.data?.trackerSheetUrl ?? request.data?.sheetUrl ?? '').trim();
   const trackerSheetName = String(request.data?.trackerSheetName ?? request.data?.sheetName ?? '').trim();
   const studentSheetUrl = String(request.data?.studentSheetUrl ?? '').trim();
@@ -178,6 +202,59 @@ export const syncMentorPaymentSheet = onCall(async (request) => {
     : [];
   const sheetUrl = trackerSheetUrl;
   const sheetName = trackerSheetName;
+  const importId = db.collection('imports').doc().id;
+
+  if (singleWorkbookUrl) {
+    const mentorSheetName = String(request.data?.mentorSheetName ?? 'Import Ready — Mentors').trim();
+    const masterStudentSheetName = String(request.data?.studentSheetName ?? 'Import Ready — Students').trim();
+    const [mentorResponse, studentResponse] = await Promise.all([
+      fetch(toCsvExportUrl(singleWorkbookUrl, mentorSheetName)),
+      fetch(toCsvExportUrl(singleWorkbookUrl, masterStudentSheetName)),
+    ]);
+    if (!mentorResponse.ok || !studentResponse.ok) {
+      throw new HttpsError('failed-precondition', `Could not fetch master workbook CSV (${mentorResponse.status}/${studentResponse.status})`);
+    }
+    const parsed = parseTrackerCsv(await mentorResponse.text(), mentorSheetName);
+    const studentParsed = parseStudentRecordCsv(await studentResponse.text(), masterStudentSheetName);
+    const trackerRows = parsed.mode === 'student' ? parsed.rows : parsed.aggregateRows;
+    const resolvedStudents = resolveSingleWorkbookStudents(trackerRows, studentParsed.rows);
+    const errors = [...parsed.errors, ...studentParsed.errors];
+    const reviewIssues = errors.map(toReviewIssue);
+    const summary = buildDualSummary([...trackerRows, ...resolvedStudents.generatedTrackerRows], resolvedStudents.rows);
+    if (errors.length > 0) {
+      await db.collection('imports').doc(importId).set({
+        id: importId,
+        sourceType: 'single_google_sheet',
+        mode: 'single_workbook',
+        sheetUrl: singleWorkbookUrl,
+        mentorSheetName,
+        studentSheetName: masterStudentSheetName,
+        importedBy: uid,
+        importedAt: Date.now(),
+        rowCount: studentParsed.rows.length + trackerRows.length,
+        successCount: 0,
+        errorCount: errors.length,
+        errors: errors.slice(0, 100),
+        reviewIssues: reviewIssues.slice(0, 100),
+        summary,
+      });
+      return { importId, mode: 'single_workbook', summary, errors, reviewIssues };
+    }
+    await commitWritesInChunks(
+      await buildDualImportWrites({
+        parsed: { ...parsed, mode: 'aggregate', rows: [], aggregateRows: [...trackerRows.filter((row): row is AggregateRow => 'numberOfStudents' in row), ...resolvedStudents.generatedTrackerRows] },
+        studentRows: resolvedStudents.rows,
+        importId,
+        importedBy: uid,
+        trackerSheetUrl: singleWorkbookUrl,
+        trackerSheetName: mentorSheetName,
+        studentSheetUrl: singleWorkbookUrl,
+        studentSheetName: masterStudentSheetName,
+      }),
+    );
+    return { importId, mode: 'single_workbook', summary, errors: [] };
+  }
+
   if (!sheetUrl) throw new HttpsError('invalid-argument', 'sheetUrl is required');
 
   const response = await fetch(toCsvExportUrl(sheetUrl, sheetName));
@@ -186,7 +263,6 @@ export const syncMentorPaymentSheet = onCall(async (request) => {
   }
 
   const parsed = parseTrackerCsv(await response.text(), sheetName || 'Mentor Payment Tracker');
-  const importId = db.collection('imports').doc().id;
 
   if (studentSheetUrl) {
     const requestedStudentSheets = studentSheetNames.length > 0 ? studentSheetNames : [studentSheetName || 'Student Record'];
@@ -201,6 +277,7 @@ export const syncMentorPaymentSheet = onCall(async (request) => {
     const trackerRows = parsed.mode === 'student' ? parsed.rows : parsed.aggregateRows;
     const resolvedStudents = resolveStudentMentors(trackerRows, studentParsed.rows);
     const errors = [...parsed.errors, ...studentParsed.errors, ...resolvedStudents.errors];
+    const reviewIssues = errors.map(toReviewIssue);
     const summary = buildDualSummary(trackerRows, resolvedStudents.rows);
     if (errors.length > 0) {
       await db.collection('imports').doc(importId).set({
@@ -217,9 +294,10 @@ export const syncMentorPaymentSheet = onCall(async (request) => {
         successCount: 0,
         errorCount: errors.length,
         errors: errors.slice(0, 100),
+        reviewIssues: reviewIssues.slice(0, 100),
         summary,
       });
-      return { importId, mode: 'dual', summary, errors };
+      return { importId, mode: 'dual', summary, errors, reviewIssues };
     }
     await commitWritesInChunks(
       await buildDualImportWrites({
@@ -268,6 +346,101 @@ export const syncMentorPaymentSheet = onCall(async (request) => {
   return { importId, mode: parsed.mode, summary, errors: [] };
 });
 
+export const commitReviewedImport = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError('unauthenticated', 'Sign in required', reviewedImportDetails('auth-admin-lookup'));
+  }
+
+  let phase: ReviewedImportPhase = 'auth-admin-lookup';
+  let trackerRows: AnyRow[] = [];
+  let studentRows: StudentRecordRow[] = [];
+  let writes: Array<{ ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }> = [];
+  const dryRun = request.data?.dryRun === true;
+  try {
+    const db = firestoreDb();
+    const userSnap = await db.collection('users').doc(uid).get();
+    const isAdmin = request.auth?.token.admin === true || userSnap.data()?.role === 'admin';
+    if (!isAdmin) {
+      throw new HttpsError('permission-denied', 'Only admins can commit reviewed imports', reviewedImportDetails(phase));
+    }
+
+    phase = 'payload-parsing';
+    trackerRows = parseReviewedTrackerRows(request.data?.trackerRows);
+    studentRows = parseReviewedStudentRows(request.data?.studentRows);
+    if (trackerRows.length === 0 || studentRows.length === 0) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Reviewed import requires mentor tracker rows and student rows',
+        reviewedImportDetails(phase, trackerRows, studentRows),
+      );
+    }
+
+    phase = 'write-construction';
+    const importId = db.collection('imports').doc().id;
+    const fileName = String(request.data?.fileName ?? 'Reviewed upload import').trim() || 'Reviewed upload import';
+    writes = await buildDualImportWrites({
+      trackerRows,
+      studentRows,
+      importId,
+      importedBy: uid,
+      fileName,
+      sourceType: 'dual_excel',
+    });
+    const summary = summarizeWrites(writes);
+    const preview = buildDualSummary(trackerRows, studentRows);
+    if (dryRun) {
+      phase = 'dry-run';
+      return {
+        importId,
+        mode: 'dual',
+        version: REVIEWED_IMPORT_FUNCTION_VERSION,
+        dryRun: true,
+        summary,
+        preview,
+        errors: [],
+      };
+    }
+
+    phase = 'firestore-commit';
+    await commitWritesInChunks(writes, { trackerRows, studentRows });
+    return {
+      importId,
+      mode: 'dual',
+      version: REVIEWED_IMPORT_FUNCTION_VERSION,
+      dryRun: false,
+      summary,
+      preview,
+      errors: [],
+    };
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    console.error('commitReviewedImport failed', error);
+    throw new HttpsError(
+      'internal',
+      `Reviewed import failed during ${phase}: ${error instanceof Error ? error.message : 'Unknown server error'}`,
+      reviewedImportDetails(phase, trackerRows, studentRows, writes),
+    );
+  }
+});
+
+function reviewedImportDetails(
+  phase: ReviewedImportPhase,
+  trackerRows: AnyRow[] = [],
+  studentRows: StudentRecordRow[] = [],
+  writes: Array<{ ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }> = [],
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    version: REVIEWED_IMPORT_FUNCTION_VERSION,
+    phase,
+    trackerRowCount: trackerRows.length,
+    studentRowCount: studentRows.length,
+    writeCount: writes.length,
+    ...extra,
+  };
+}
+
 function toCsvExportUrl(input: string, sheetName: string): string {
   const url = new URL(input);
   const id = url.pathname.match(/\/spreadsheets\/d\/([^/]+)/)?.[1];
@@ -277,6 +450,79 @@ function toCsvExportUrl(input: string, sheetName: string): string {
   }
   const gid = url.searchParams.get('gid') ?? '0';
   return `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${encodeURIComponent(gid)}`;
+}
+
+function parseReviewedTrackerRows(value: unknown): AnyRow[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((row, index) => {
+      const record = isRecord(row) ? row : {};
+      const base = {
+        rowNumber: toNumber(record.rowNumber, index + 1),
+        sourceSheet: toStringValue(record.sourceSheet) || 'Reviewed Upload',
+        cohort: toStringValue(record.cohort) || 'Imported Tracker',
+        course: toStringValue(record.course),
+        mentorName: toStringValue(record.mentorName),
+        mentorEmail: toStringValue(record.mentorEmail).toLowerCase() || undefined,
+        courseStatus: toStringValue(record.courseStatus) || 'pending',
+        startDate: toNumber(record.startDate),
+        dueDate: toNumber(record.dueDate),
+        totalAmountPaid: toNumber(record.totalAmountPaid),
+        amountDue: toNumber(record.amountDue),
+        amountDisbursed: toNumber(record.amountDisbursed),
+        paymentStatus: toStringValue(record.paymentStatus) || 'pending',
+        coursePrice: toNumber(record.coursePrice),
+        commissionRate: toNumber(record.commissionRate, 0.37),
+      };
+      if (toNumber(record.numberOfStudents) > 0) {
+        return { ...base, numberOfStudents: toNumber(record.numberOfStudents) } as AggregateRow;
+      }
+      return {
+        ...base,
+        studentName: toStringValue(record.studentName),
+        studentEmail: toStringValue(record.studentEmail).toLowerCase(),
+      } as StudentRow;
+    })
+    .filter((row) => row.course && row.mentorName);
+}
+
+function parseReviewedStudentRows(value: unknown): StudentRecordRow[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((row, index) => {
+      const record = isRecord(row) ? row : {};
+      return {
+        rowNumber: toNumber(record.rowNumber, index + 1),
+        sourceSheet: toStringValue(record.sourceSheet) || 'Reviewed Upload',
+        studentType: toStringValue(record.studentType) || undefined,
+        name: toStringValue(record.name),
+        course: toStringValue(record.course),
+        mentorName: toStringValue(record.mentorName),
+        emailAddress: toStringValue(record.emailAddress).replace(/\s+/g, '').toLowerCase(),
+        phoneNumber: toStringValue(record.phoneNumber) || undefined,
+        onboardingDate: toNumber(record.onboardingDate),
+        courseStatus: toStringValue(record.courseStatus) || 'pending',
+        amountPaid: toNumber(record.amountPaid),
+        paymentStatus: toStringValue(record.paymentStatus) || 'pending',
+        trackerSourceSheet: toStringValue(record.trackerSourceSheet) || null,
+        trackerRowNumber: record.trackerRowNumber === null ? null : toNumber(record.trackerRowNumber),
+        cohort: toStringValue(record.cohort) || undefined,
+        amountDue: toNumber(record.amountDue),
+        amountDisbursed: toNumber(record.amountDisbursed),
+        correctedFields: Array.isArray(record.correctedFields) ? record.correctedFields.map((field) => String(field)) : [],
+        originalStudentRow: isRecord(record.originalStudentRow) ? record.originalStudentRow as Partial<StudentRecordRow> : undefined,
+      };
+    })
+    .filter((row) => row.name && row.course && row.mentorName);
+}
+
+function toStringValue(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+function toNumber(value: unknown, fallback = 0): number {
+  const parsed = typeof value === 'number' ? value : Number(String(value ?? '').replace(/[₦,\s]/g, ''));
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function parseTrackerCsv(csv: string, sourceSheet = 'Mentor Payment Tracker'): {
@@ -333,9 +579,9 @@ function parseTrackerCsv(csv: string, sourceSheet = 'Mentor Payment Tracker'): {
       if (seen.has(duplicate)) rowErrors.push({ rowNumber, field: 'studentEmail', message: 'Duplicate row.' });
       seen.add(duplicate);
       if (rowErrors.length) errors.push(...rowErrors);
-      else rows.push(row);
+      rows.push(row);
     });
-    return { mode, rows: errors.length ? [] : rows, aggregateRows: [], errors };
+    return { mode, rows, aggregateRows: [], errors };
   }
 
   const aggregateRows: AggregateRow[] = [];
@@ -347,9 +593,9 @@ function parseTrackerCsv(csv: string, sourceSheet = 'Mentor Payment Tracker'): {
     if (seen.has(duplicate)) rowErrors.push({ rowNumber, field: 'course', message: 'Duplicate row.' });
     seen.add(duplicate);
     if (rowErrors.length) errors.push(...rowErrors);
-    else aggregateRows.push(row);
+    aggregateRows.push(row);
   });
-  return { mode, rows: [], aggregateRows: errors.length ? [] : aggregateRows, errors };
+  return { mode, rows: [], aggregateRows, errors };
 }
 
 function parseCsv(csv: string): string[][] {
@@ -388,7 +634,7 @@ function findHeaderRow(table: string[][]): { index: number; headers: Array<Field
   table.forEach((row, index) => {
     const headers = row.map((value) => HEADER_ALIASES[normalizeImportKey(value)] ?? null);
     const unique = new Set(headers.filter(Boolean));
-    const hasCore = unique.has('course') && unique.has('mentorName') && unique.has('courseStatus') && unique.has('totalAmountPaid');
+    const hasCore = unique.has('course') && unique.has('mentorName') && unique.has('totalAmountPaid');
     if (hasCore && (!best || unique.size > best.score)) best = { index, headers, score: unique.size };
   });
   return best;
@@ -425,13 +671,13 @@ function normalizeBaseRow(raw: Record<string, string>, rowNumber: number): BaseR
     course: (raw.course ?? '').trim(),
     mentorName: (raw.mentorName ?? '').trim(),
     mentorEmail: (raw.mentorEmail ?? '').trim().toLowerCase() || undefined,
-    courseStatus: (raw.courseStatus ?? '').trim(),
+    courseStatus: (raw.courseStatus ?? '').trim() || 'pending',
     startDate: parseDate(raw.startDate),
     dueDate: parseDate(raw.dueDate),
     totalAmountPaid,
     amountDue,
     amountDisbursed: parseCurrency(raw.amountDisbursed),
-    paymentStatus: (raw.paymentStatus ?? '').trim(),
+    paymentStatus: (raw.paymentStatus ?? '').trim() || 'pending',
     coursePrice: parseCurrency(raw.coursePrice) || totalAmountPaid,
     commissionRate: Number(raw.commissionRate) || 0.37,
   };
@@ -446,22 +692,26 @@ function normalizeStudentRow(raw: Record<string, string>, rowNumber: number): St
 }
 
 function normalizeAggregateRow(raw: Record<string, string>, rowNumber: number): AggregateRow {
+  const courseStatusValue = String(raw.courseStatus ?? '').trim();
+  const parsedStudents = Number(String(raw.numberOfStudents ?? '').replace(/,/g, '')) || 0;
+  const statusAsStudentCount = !parsedStudents && /^\d+$/.test(courseStatusValue) ? Number(courseStatusValue) : 0;
   return {
     ...normalizeBaseRow(raw, rowNumber),
-    numberOfStudents: Number(String(raw.numberOfStudents ?? '').replace(/,/g, '')) || 0,
+    courseStatus: statusAsStudentCount ? 'pending' : (raw.courseStatus ?? '').trim() || 'pending',
+    numberOfStudents: parsedStudents || statusAsStudentCount,
   };
 }
 
 function validateBaseRow(row: BaseRow): ValidationError[] {
   const errors: ValidationError[] = [];
-  (['course', 'mentorName', 'courseStatus', 'paymentStatus'] as const).forEach((field) => {
+  (['course', 'mentorName'] as const).forEach((field) => {
     if (!String(row[field] ?? '').trim()) errors.push({ rowNumber: row.rowNumber, field, message: 'Required value is missing.' });
   });
   if (row.mentorEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.mentorEmail)) {
     errors.push({ rowNumber: row.rowNumber, field: 'mentorEmail', message: 'Invalid email.' });
   }
-  if (!row.startDate) errors.push({ rowNumber: row.rowNumber, field: 'startDate', message: 'Invalid date.' });
-  if (!row.dueDate) errors.push({ rowNumber: row.rowNumber, field: 'dueDate', message: 'Invalid date.' });
+  if (Number.isNaN(row.startDate)) errors.push({ rowNumber: row.rowNumber, field: 'startDate', message: 'Invalid date.' });
+  if (Number.isNaN(row.dueDate)) errors.push({ rowNumber: row.rowNumber, field: 'dueDate', message: 'Invalid date.' });
   if (row.totalAmountPaid < 0) errors.push({ rowNumber: row.rowNumber, field: 'totalAmountPaid', message: 'Cannot be negative.' });
   if (row.amountDue < 0) errors.push({ rowNumber: row.rowNumber, field: 'amountDue', message: 'Cannot be negative.' });
   if (row.amountDisbursed < 0) errors.push({ rowNumber: row.rowNumber, field: 'amountDisbursed', message: 'Cannot be negative.' });
@@ -516,10 +766,26 @@ function parseStudentRecordCsv(csv: string, sourceSheet = 'Student Record'): { r
     if (seen.has(duplicate)) rowErrors.push({ rowNumber: row.rowNumber, field: 'emailAddress', message: 'Duplicate row.' });
     if (row.emailAddress && row.course) seen.add(duplicate);
     if (rowErrors.length) errors.push(...rowErrors);
-    else rows.push(row);
+    rows.push(row);
   });
 
-  return { rows: errors.length ? [] : rows, errors };
+  return { rows, errors };
+}
+
+function toReviewIssue(error: ValidationError): ImportReviewIssue {
+  const fieldCode: Record<string, string> = {
+    name: 'missingName',
+    emailAddress: error.message.toLowerCase().includes('valid') ? 'invalidEmail' : 'missingEmail',
+    course: error.message.toLowerCase().includes('no mentor') ? 'unmatchedCourse' : 'missingCourse',
+    mentorName: error.message.toLowerCase().includes('multiple') ? 'ambiguousCourse' : 'missingMentor',
+    onboardingDate: 'invalidDate',
+    studentEmail: 'invalidEmail',
+  };
+  return {
+    ...error,
+    code: fieldCode[error.field] ?? 'validation',
+    blocking: true,
+  };
 }
 
 function isIgnorableStudentRecordRow(raw: Record<string, string>): boolean {
@@ -537,7 +803,6 @@ function isIgnorableStudentRecordRow(raw: Record<string, string>): boolean {
 
   if (!hasIdentity && !hasEnrollment) return true;
   if (hasOnlyDropdownStatus) return true;
-  if (!emailAddress && !amountPaid && (!name || !course)) return true;
   return false;
 }
 
@@ -563,6 +828,7 @@ function normalizeStudentRecordRow(raw: Record<string, string>, rowNumber: numbe
   return {
     rowNumber,
     sourceSheet: (raw.sourceSheet ?? '').trim(),
+    studentType: (raw.studentType ?? '').trim() || undefined,
     name: (raw.name ?? '').trim(),
     course: (raw.course ?? '').trim(),
     mentorName: (raw.mentorName ?? '').trim(),
@@ -610,6 +876,45 @@ function resolveStudentMentors(trackerRows: AnyRow[], studentRows: StudentRecord
     return [{ ...row, mentorName: matches[0].mentorName }];
   });
   return { rows, errors };
+}
+
+function resolveSingleWorkbookStudents(trackerRows: AnyRow[], studentRows: StudentRecordRow[]) {
+  const courseIndex = buildCourseMentorIndex(trackerRows);
+  const generatedTrackerRows: AggregateRow[] = [];
+  const rows = studentRows.map((row) => {
+    if (row.mentorName.trim()) return row;
+    const matches = courseIndex.get(canonicalCourseKey(row.course)) ?? [];
+    if (matches.length === 1) return { ...row, mentorName: matches[0].mentorName };
+    if (matches.length > 1) return row;
+
+    const existingGenerated = generatedTrackerRows.find((trackerRow) => canonicalCourseKey(trackerRow.course) === canonicalCourseKey(row.course));
+    if (!existingGenerated) {
+      generatedTrackerRows.push({
+        rowNumber: 900000 + generatedTrackerRows.length,
+        sourceSheet: 'Generated Unassigned Mentor',
+        cohort: row.studentType || 'Unassigned Courses',
+        course: row.course,
+        mentorName: UNASSIGNED_MENTOR_NAME,
+        mentorEmail: UNASSIGNED_MENTOR_EMAIL,
+        courseStatus: 'pending',
+        startDate: 0,
+        dueDate: 0,
+        totalAmountPaid: row.amountPaid,
+        amountDue: 0,
+        amountDisbursed: 0,
+        paymentStatus: 'pending',
+        coursePrice: row.amountPaid,
+        commissionRate: 0.37,
+        numberOfStudents: 1,
+      });
+    } else {
+      existingGenerated.totalAmountPaid += row.amountPaid;
+      existingGenerated.coursePrice = Math.round(existingGenerated.totalAmountPaid / Math.max(existingGenerated.numberOfStudents + 1, 1));
+      existingGenerated.numberOfStudents += 1;
+    }
+    return { ...row, mentorName: UNASSIGNED_MENTOR_NAME };
+  });
+  return { rows, generatedTrackerRows };
 }
 
 function buildCourseMentorIndex(trackerRows: AnyRow[]) {
@@ -689,7 +994,10 @@ async function buildImportWrites({
     parsed.rows.forEach((row) => {
       const { mentorId, courseId } = resolveMentorCourse(row);
       const existingStudent = usersByEmail.get(row.studentEmail);
-      const studentId = String(existingStudent?.uid ?? `imported_student_${stableImportId([row.studentEmail])}`);
+      const sameNamedExistingStudent = existingStudent && normalizeImportKey(existingStudent.name) === normalizeImportKey(row.studentName)
+        ? existingStudent
+        : undefined;
+      const studentId = String(sameNamedExistingStudent?.uid ?? `imported_student_${stableImportId([row.studentName, row.studentEmail, row.sourceSheet, row.rowNumber])}`);
       const existingEnrollment = enrollments.find((enrollment) => enrollment.studentId === studentId && enrollment.courseId === courseId);
       const enrollmentId = String(existingEnrollment?.id ?? `imported_enrollment_${stableImportId([studentId, courseId])}`);
       put(db.collection('users').doc(studentId), {
@@ -697,8 +1005,8 @@ async function buildImportWrites({
         email: row.studentEmail,
         name: row.studentName,
         role: 'student',
-        createdAt: existingStudent?.createdAt ?? now,
-        kycStatus: existingStudent?.kycStatus ?? 'not_started',
+        createdAt: sameNamedExistingStudent?.createdAt ?? now,
+        kycStatus: sameNamedExistingStudent?.kycStatus ?? 'not_started',
         sourceImportId: importId,
         updatedAt: now,
       });
@@ -781,6 +1089,7 @@ async function buildImportWrites({
 
 async function buildDualImportWrites({
   parsed,
+  trackerRows: providedTrackerRows,
   studentRows,
   importId,
   importedBy,
@@ -788,19 +1097,24 @@ async function buildDualImportWrites({
   trackerSheetName,
   studentSheetUrl,
   studentSheetName,
+  fileName,
+  sourceType = 'dual_google_sheets',
 }: {
-  parsed: ReturnType<typeof parseTrackerCsv>;
+  parsed?: ReturnType<typeof parseTrackerCsv>;
+  trackerRows?: AnyRow[];
   studentRows: StudentRecordRow[];
   importId: string;
   importedBy: string;
-  trackerSheetUrl: string;
-  trackerSheetName: string;
-  studentSheetUrl: string;
-  studentSheetName: string;
+  trackerSheetUrl?: string;
+  trackerSheetName?: string;
+  studentSheetUrl?: string;
+  studentSheetName?: string;
+  fileName?: string;
+  sourceType?: string;
 }) {
   const db = firestoreDb();
   const now = Date.now();
-  const trackerRows: AnyRow[] = parsed.mode === 'student' ? parsed.rows : parsed.aggregateRows;
+  const trackerRows: AnyRow[] = providedTrackerRows ?? (parsed?.mode === 'student' ? parsed.rows : parsed?.aggregateRows ?? []);
   const [usersSnap, coursesSnap, enrollmentsSnap] = await Promise.all([
     db.collection('users').get(),
     db.collection('courses').get(),
@@ -877,8 +1191,12 @@ async function buildDualImportWrites({
   studentRows.forEach((row) => {
     const trackerRow = trackerByCourse.get(stableImportId([row.mentorName, canonicalCourseKey(row.course)]));
     const { mentorId, courseId } = resolveMentorCourse(row.mentorName, row.course, trackerRow);
-    const existingStudent = usersByEmail.get(row.emailAddress);
-    const studentId = String(existingStudent?.uid ?? `imported_student_${stableImportId([row.emailAddress])}`);
+    const resolvedStudentEmail = resolveStudentEmail(row);
+    const existingStudent = usersByEmail.get(resolvedStudentEmail);
+    const sameNamedExistingStudent = existingStudent && normalizeImportKey(existingStudent.name) === normalizeImportKey(row.name)
+      ? existingStudent
+      : undefined;
+    const studentId = String(sameNamedExistingStudent?.uid ?? `imported_student_${stableImportId([row.name, resolvedStudentEmail, row.sourceSheet, row.rowNumber])}`);
     const existingEnrollment = enrollments.find((enrollment) => enrollment.studentId === studentId && enrollment.courseId === courseId);
     const enrollmentId = String(existingEnrollment?.id ?? `imported_enrollment_${stableImportId([studentId, courseId])}`);
     const commissionRate = trackerRow?.commissionRate ?? 0.37;
@@ -887,12 +1205,12 @@ async function buildDualImportWrites({
       : Math.round(row.amountPaid * commissionRate);
     put(db.collection('users').doc(studentId), {
       uid: studentId,
-      email: row.emailAddress,
+      email: resolvedStudentEmail,
       name: row.name,
       role: 'student',
-      createdAt: existingStudent?.createdAt ?? now,
-      kycStatus: existingStudent?.kycStatus ?? 'not_started',
-      biodata: { ...(existingStudent?.biodata ?? {}), phoneNumber: row.phoneNumber },
+      createdAt: sameNamedExistingStudent?.createdAt ?? now,
+      kycStatus: sameNamedExistingStudent?.kycStatus ?? 'not_started',
+      biodata: buildStudentBiodata(sameNamedExistingStudent?.biodata, row.phoneNumber),
       sourceImportId: importId,
       updatedAt: now,
     });
@@ -907,12 +1225,12 @@ async function buildDualImportWrites({
       onboardedAt: row.onboardingDate,
       totalPaid: row.amountPaid,
       commissionEarned,
-      cohort: trackerRow?.cohort ?? 'Imported Tracker',
+      cohort: row.cohort ?? trackerRow?.cohort ?? 'Imported Tracker',
       sourceSheet: row.sourceSheet,
       sourceRowNumber: row.rowNumber,
-      trackerRowNumber: trackerRow?.rowNumber ?? null,
-      amountDue: trackerRow?.amountDue ?? 0,
-      amountDisbursed: trackerRow?.amountDisbursed ?? 0,
+      trackerRowNumber: row.trackerRowNumber ?? trackerRow?.rowNumber ?? null,
+      amountDue: row.amountDue ?? trackerRow?.amountDue ?? 0,
+      amountDisbursed: row.amountDisbursed ?? trackerRow?.amountDisbursed ?? 0,
       sourceImportId: importId,
       updatedAt: now,
     });
@@ -938,7 +1256,7 @@ async function buildDualImportWrites({
       sourceImportId: importId,
       studentId,
       studentName: row.name,
-      studentEmail: row.emailAddress,
+      studentEmail: resolvedStudentEmail,
       phoneNumber: row.phoneNumber ?? null,
       courseId,
       courseTitle: row.course,
@@ -950,29 +1268,40 @@ async function buildDualImportWrites({
       paymentStatus: row.paymentStatus,
       sourceSheet: row.sourceSheet,
       sourceRowNumber: row.rowNumber,
-      trackerSourceSheet: trackerRow?.sourceSheet ?? null,
-      trackerRowNumber: trackerRow?.rowNumber ?? null,
-      cohort: trackerRow?.cohort ?? 'Imported Tracker',
+      trackerSourceSheet: row.trackerSourceSheet ?? trackerRow?.sourceSheet ?? null,
+      trackerRowNumber: row.trackerRowNumber ?? trackerRow?.rowNumber ?? null,
+      cohort: row.cohort ?? trackerRow?.cohort ?? 'Imported Tracker',
+      corrections: buildCorrectionAudit(row, importedBy),
       importedAt: now,
       updatedAt: now,
     });
   });
 
-  put(db.collection('imports').doc(importId), {
+  const importRecord: Record<string, unknown> = {
     id: importId,
-    sourceType: 'dual_google_sheets',
+    sourceType,
     mode: 'dual',
-    trackerSheetUrl,
-    trackerSheetName: trackerSheetName || null,
-    studentSheetUrl,
-    studentSheetName: studentSheetName || null,
     importedBy,
     importedAt: now,
     rowCount: trackerRows.length + studentRows.length,
     successCount: trackerRows.length + studentRows.length,
     errorCount: 0,
     summary: buildDualSummary(trackerRows, studentRows),
-  });
+  };
+  if (fileName) importRecord.fileName = fileName;
+  if (trackerSheetUrl) importRecord.trackerSheetUrl = trackerSheetUrl;
+  if (trackerSheetName !== undefined) importRecord.trackerSheetName = trackerSheetName || null;
+  if (studentSheetUrl) importRecord.studentSheetUrl = studentSheetUrl;
+  if (studentSheetName !== undefined) importRecord.studentSheetName = studentSheetName || null;
+  const corrections = studentRows
+    .filter((row) => row.correctedFields?.length)
+    .map((row) => ({
+      sourceSheet: row.sourceSheet,
+      sourceRowNumber: row.rowNumber,
+      correctedFields: row.correctedFields,
+    }));
+  if (corrections.length) importRecord.corrections = corrections;
+  put(db.collection('imports').doc(importId), importRecord);
 
   return [...writes.values()];
 }
@@ -1002,13 +1331,70 @@ function putPayout(
   });
 }
 
-async function commitWritesInChunks(writes: Array<{ ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }>) {
+async function commitWritesInChunks(
+  writes: Array<{ ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }>,
+  diagnostics?: { trackerRows?: AnyRow[]; studentRows?: StudentRecordRow[] },
+) {
   const db = firestoreDb();
   for (let i = 0; i < writes.length; i += 450) {
     const batch = db.batch();
-    writes.slice(i, i + 450).forEach((write) => batch.set(write.ref, write.data, { merge: true }));
-    await batch.commit();
+    const chunk = writes.slice(i, i + 450);
+    chunk.forEach((write) => batch.set(write.ref, sanitizeForFirestore(write.data), { merge: true }));
+    try {
+      await batch.commit();
+    } catch (error) {
+      throw new HttpsError(
+        'internal',
+        `Firestore commit failed at chunk ${Math.floor(i / 450) + 1}: ${error instanceof Error ? error.message : 'Unknown commit error'}`,
+        reviewedImportDetails(
+          'firestore-commit',
+          diagnostics?.trackerRows ?? [],
+          diagnostics?.studentRows ?? [],
+          writes,
+          {
+            chunkIndex: Math.floor(i / 450),
+            firstWritePath: chunk[0]?.ref.path ?? null,
+            lastWritePath: chunk[chunk.length - 1]?.ref.path ?? null,
+          },
+        ),
+      );
+    }
   }
+}
+
+function sanitizeForFirestore(value: unknown): FirebaseFirestore.DocumentData {
+  if (!isRecord(value)) return {};
+  return removeUndefinedDeep(value);
+}
+
+function removeUndefinedDeep(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, fieldValue]) => fieldValue !== undefined)
+      .map(([key, fieldValue]) => [
+        key,
+        isRecord(fieldValue)
+          ? removeUndefinedDeep(fieldValue)
+          : Array.isArray(fieldValue)
+            ? fieldValue.map((item) => (isRecord(item) ? removeUndefinedDeep(item) : item)).filter((item) => item !== undefined)
+            : fieldValue,
+      ]),
+  );
+}
+
+function summarizeWrites(writes: Array<{ ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }>) {
+  const collectionCounts = (collectionName: string) => writes.filter((write) => write.ref.path.startsWith(`${collectionName}/`)).length;
+  return {
+    mentors: writes.filter((write) => write.ref.path.startsWith('users/') && write.data.role === 'mentor').length,
+    students: writes.filter((write) => write.ref.path.startsWith('users/') && write.data.role === 'student').length,
+    courses: collectionCounts('courses'),
+    enrollments: collectionCounts('enrollments'),
+    payments: collectionCounts('payments'),
+    payouts: collectionCounts('payouts'),
+    summaries: collectionCounts('paymentTrackerSummaries'),
+    auditRecords: collectionCounts('studentRecordImports') + collectionCounts('imports'),
+    writes: writes.length,
+  };
 }
 
 function buildSummary(rows: AnyRow[], mode: ImportMode) {
@@ -1051,6 +1437,17 @@ function buildDualSummary(trackerRows: AnyRow[], studentRows: StudentRecordRow[]
   };
 }
 
+function buildCorrectionAudit(row: StudentRecordRow, correctedBy: string) {
+  if (!row.correctedFields?.length || !row.originalStudentRow) return null;
+  return {
+    correctedFields: row.correctedFields,
+    originalValues: Object.fromEntries(row.correctedFields.map((field) => [field, row.originalStudentRow?.[field as keyof StudentRecordRow] ?? null])),
+    correctedValues: Object.fromEntries(row.correctedFields.map((field) => [field, row[field as keyof StudentRecordRow] ?? null])),
+    correctedBy,
+    correctedAt: Date.now(),
+  };
+}
+
 function normalizeImportKey(value: string): string {
   return value.trim().toLowerCase().replace(/₦/g, '').replace(/[^a-z0-9]+/g, '');
 }
@@ -1087,6 +1484,26 @@ function canonicalCourseKey(course: string): string {
 function makePlaceholderEmail(name: string, role: 'mentor' | 'student'): string {
   const slug = stableImportId([name]) || role;
   return `${slug}.${role}@imported.mentorflow.local`;
+}
+
+function resolveStudentEmail(row: StudentRecordRow): string {
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.emailAddress)) return row.emailAddress;
+  return makePlaceholderEmail(`${row.name || 'student'}-${row.sourceSheet}-${row.rowNumber}`, 'student');
+}
+
+function buildStudentBiodata(existingBiodata: unknown, phoneNumber: string | undefined): Record<string, unknown> {
+  const biodata = removeUndefinedValues(isRecord(existingBiodata) ? existingBiodata : {});
+  const cleanedPhoneNumber = phoneNumber?.trim();
+  if (cleanedPhoneNumber) biodata.phoneNumber = cleanedPhoneNumber;
+  return biodata;
+}
+
+function removeUndefinedValues(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function parseCurrency(value: unknown): number {

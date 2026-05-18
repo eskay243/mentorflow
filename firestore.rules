@@ -225,6 +225,13 @@ service cloud.firestore {
     }
 
     // ================================================================
+    // config (platform settings — admin only; Cloud Functions use Admin SDK)
+    // ================================================================
+    match /config/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ================================================================
     // imports
     // ================================================================
     match /imports/{importId} {

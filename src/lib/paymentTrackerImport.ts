@@ -38,6 +38,26 @@ export interface PaymentTrackerValidationError {
   message: string;
 }
 
+export type ImportReviewIssueCode =
+  | 'missingName'
+  | 'missingEmail'
+  | 'invalidEmail'
+  | 'missingCourse'
+  | 'missingMentor'
+  | 'unmatchedCourse'
+  | 'ambiguousCourse'
+  | 'invalidDate'
+  | 'duplicateRow';
+
+export interface ImportReviewIssue {
+  code: ImportReviewIssueCode;
+  rowNumber: number;
+  sourceSheet?: string;
+  field: string;
+  message: string;
+  blocking: boolean;
+}
+
 export interface PaymentTrackerParseResult {
   mode: PaymentTrackerImportMode;
   rows: PaymentTrackerRow[];
@@ -61,6 +81,7 @@ export interface PaymentTrackerPreview {
 export interface StudentRecordImportRow {
   rowNumber: number;
   sourceSheet: string;
+  studentType?: string;
   name: string;
   course: string;
   mentorName: string;
@@ -78,6 +99,7 @@ export interface CombinedImportRow {
   trackerRowNumber?: number;
   trackerSourceSheet?: string;
   cohort: string;
+  studentType?: string;
   name: string;
   emailAddress: string;
   phoneNumber?: string;
@@ -94,7 +116,25 @@ export interface CombinedImportRow {
   payoutStatus: string;
   commissionRate: number;
   coursePrice: number;
+  originalStudentRow?: StudentRecordImportRow;
+  correctedFields?: string[];
 }
+
+export interface SingleWorkbookParseResult {
+  trackerResult: PaymentTrackerParseResult;
+  studentResult: StudentRecordParseResult;
+  errors: PaymentTrackerValidationError[];
+  reviewIssues: ImportReviewIssue[];
+  summary: {
+    students: number;
+    mentors: number;
+    duplicateEmailIssues: number;
+    unmatchedCourses: number;
+  };
+}
+
+export const UNASSIGNED_MENTOR_NAME = 'Unassigned Mentor';
+export const UNASSIGNED_MENTOR_EMAIL = 'unassigned.mentor@imported.mentorflow.local';
 
 export interface CombinedImportResult {
   rows: CombinedImportRow[];
@@ -164,6 +204,7 @@ const HEADER_ALIASES: Record<string, TrackerField> = {
   numberofstudents: 'numberOfStudents',
   students: 'numberOfStudents',
   noofstudents: 'numberOfStudents',
+  numstudents: 'numberOfStudents',
   startdate: 'startDate',
   start: 'startDate',
   duedate: 'dueDate',
@@ -185,6 +226,8 @@ const HEADER_ALIASES: Record<string, TrackerField> = {
   courseprice: 'coursePrice',
   price: 'coursePrice',
   commissionrate: 'commissionRate',
+  commission37pct: 'amountDue',
+  balancedue: 'amountDue',
 };
 
 type StudentRecordField = keyof Omit<StudentRecordImportRow, 'rowNumber'>;
@@ -203,6 +246,7 @@ const STUDENT_RECORD_HEADER_ALIASES: Record<string, StudentRecordField> = {
   name: 'name',
   student: 'name',
   studentname: 'name',
+  studenttype: 'studentType',
   course: 'course',
   coursename: 'course',
   mentor: 'mentorName',
@@ -215,6 +259,7 @@ const STUDENT_RECORD_HEADER_ALIASES: Record<string, StudentRecordField> = {
   phone: 'phoneNumber',
   number: 'phoneNumber',
   onboardingdate: 'onboardingDate',
+  enrollmentdate: 'onboardingDate',
   onboarddate: 'onboardingDate',
   date: 'onboardingDate',
   coursestatus: 'courseStatus',
@@ -341,7 +386,6 @@ function findHeaderRow(table: unknown[][]): { headerIndex: number; headers: Arra
     const hasCore =
       unique.has('course') &&
       unique.has('mentorName') &&
-      unique.has('courseStatus') &&
       unique.has('totalAmountPaid');
     if (hasCore && (!best || score > best.score)) {
       best = { headerIndex: index, headers, score };
@@ -448,6 +492,53 @@ export async function parsePaymentTrackerFile(file: File): Promise<PaymentTracke
   return parsePaymentTrackerWorksheet(workbook.Sheets[firstSheet], firstSheet);
 }
 
+export async function parseSingleWorkbookFile(file: File): Promise<SingleWorkbookParseResult> {
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+  return parseSingleWorkbook(workbook);
+}
+
+export function parseSingleWorkbook(workbook: XLSX.WorkBook): SingleWorkbookParseResult {
+  const studentSheetName = findSheetName(workbook, 'Import Ready — Students') ?? findSheetName(workbook, 'Import Ready - Students');
+  const mentorSheetName = findSheetName(workbook, 'Import Ready — Mentors') ?? findSheetName(workbook, 'Import Ready - Mentors');
+  const errors: PaymentTrackerValidationError[] = [];
+
+  const trackerResult = mentorSheetName
+    ? parsePaymentTrackerWorksheet(workbook.Sheets[mentorSheetName], mentorSheetName)
+    : emptyTrackerResult([{ rowNumber: 0, field: 'sheet', message: 'Could not find "Import Ready — Mentors" tab.' }]);
+  const studentResult = studentSheetName
+    ? parseStudentRecordWorksheet(workbook.Sheets[studentSheetName], studentSheetName)
+    : emptyStudentResult([{ rowNumber: 0, field: 'sheet', message: 'Could not find "Import Ready — Students" tab.' }]);
+
+  const reviewIssues: ImportReviewIssue[] = [];
+  errors.push(...trackerResult.errors, ...studentResult.errors);
+  return {
+    trackerResult,
+    studentResult,
+    errors,
+    reviewIssues,
+    summary: {
+      students: studentResult.rows.length,
+      mentors: validPaymentTrackerRows(trackerResult).length,
+      duplicateEmailIssues: reviewIssues.length,
+      unmatchedCourses: 0,
+    },
+  };
+}
+
+function findSheetName(workbook: XLSX.WorkBook, wanted: string): string | undefined {
+  const wantedKey = normalizeImportKey(wanted);
+  return workbook.SheetNames.find((name) => normalizeImportKey(name) === wantedKey);
+}
+
+function emptyTrackerResult(errors: PaymentTrackerValidationError[]): PaymentTrackerParseResult {
+  return { mode: 'aggregate', rows: [], aggregateRows: [], errors, missingColumns: [], headerRowNumber: null };
+}
+
+function emptyStudentResult(errors: PaymentTrackerValidationError[]): StudentRecordParseResult {
+  return { rows: [], errors, missingColumns: [], headerRowNumber: null };
+}
+
 export function parsePaymentTrackerCsv(csv: string): PaymentTrackerParseResult {
   const workbook = XLSX.read(csv, { type: 'string' });
   const firstSheet = workbook.SheetNames[0];
@@ -460,6 +551,7 @@ export function parsePaymentTrackerWorksheet(worksheet: XLSX.WorkSheet, sourceSh
   const mode: PaymentTrackerImportMode = hasStudentColumns ? 'student' : 'aggregate';
   const requiredColumns = mode === 'student' ? REQUIRED_STUDENT_TRACKER_COLUMNS : REQUIRED_AGGREGATE_TRACKER_COLUMNS;
   const missingColumns = requiredColumns.filter((key) => !presentColumns.has(key));
+  const blockingMissingColumns = missingColumns.filter(isBlockingTrackerColumn);
   const errors: PaymentTrackerValidationError[] = [];
 
   if (!headerRowNumber) {
@@ -478,7 +570,9 @@ export function parsePaymentTrackerWorksheet(worksheet: XLSX.WorkSheet, sourceSh
       errors.push({
         rowNumber: headerRowNumber,
         field,
-        message: `Missing required column "${field}".`,
+        message: blockingMissingColumns.includes(field)
+          ? `Missing required column "${field}".`
+          : `Missing optional tracker column "${field}". A safe default will be used where possible.`,
       });
     });
   }
@@ -496,11 +590,11 @@ export function parsePaymentTrackerWorksheet(worksheet: XLSX.WorkSheet, sourceSh
       }
       seen.add(duplicateKey);
       if (rowErrors.length) errors.push(...rowErrors);
-      else studentRows.push(row);
+      studentRows.push(row);
     });
     return {
       mode,
-      rows: missingColumns.length ? [] : studentRows,
+      rows: blockingMissingColumns.length ? [] : studentRows,
       aggregateRows: [],
       errors,
       missingColumns,
@@ -520,17 +614,21 @@ export function parsePaymentTrackerWorksheet(worksheet: XLSX.WorkSheet, sourceSh
     }
     seen.add(duplicateKey);
     if (rowErrors.length) errors.push(...rowErrors);
-    else aggregateRows.push(row);
+    aggregateRows.push(row);
   });
 
   return {
     mode,
     rows: [],
-    aggregateRows: missingColumns.length ? [] : aggregateRows,
+    aggregateRows: blockingMissingColumns.length ? [] : aggregateRows,
     errors,
     missingColumns,
     headerRowNumber,
   };
+}
+
+function isBlockingTrackerColumn(field: string): boolean {
+  return ['course', 'mentorName', 'studentName', 'studentEmail', 'totalAmountPaid', 'numberOfStudents'].includes(field);
 }
 
 function baseRow(raw: Record<string, unknown>, rowNumber: number): PaymentTrackerBaseRow {
@@ -545,13 +643,13 @@ function baseRow(raw: Record<string, unknown>, rowNumber: number): PaymentTracke
     course: String(raw.course ?? '').trim(),
     mentorName: String(raw.mentorName ?? '').trim(),
     mentorEmail: String(raw.mentorEmail ?? '').trim().toLowerCase() || undefined,
-    courseStatus: String(raw.courseStatus ?? '').trim(),
+    courseStatus: String(raw.courseStatus ?? '').trim() || 'pending',
     startDate: parseTrackerDate(raw.startDate),
     dueDate: parseTrackerDate(raw.dueDate),
     totalAmountPaid,
     amountDue,
     amountDisbursed,
-    paymentStatus: String(raw.paymentStatus ?? '').trim(),
+    paymentStatus: String(raw.paymentStatus ?? '').trim() || 'pending',
     coursePrice: parseCurrency(raw.coursePrice) || totalAmountPaid,
     commissionRate,
   };
@@ -566,10 +664,14 @@ function normalizeStudentRow(raw: Record<string, unknown>, rowNumber: number): P
 }
 
 function normalizeAggregateRow(raw: Record<string, unknown>, rowNumber: number): PaymentTrackerAggregateRow {
+  const courseStatusValue = String(raw.courseStatus ?? '').trim();
+  const parsedStudents = Number(String(raw.numberOfStudents ?? '').replace(/,/g, '')) || 0;
+  const statusAsStudentCount = !parsedStudents && /^\d+$/.test(courseStatusValue) ? Number(courseStatusValue) : 0;
   return {
     ...baseRow(raw, rowNumber),
     cohort: String(raw.cohort ?? '').trim() || inferCohortFromNearbyText(raw),
-    numberOfStudents: Number(String(raw.numberOfStudents ?? '').replace(/,/g, '')) || 0,
+    courseStatus: statusAsStudentCount ? 'pending' : String(raw.courseStatus ?? '').trim() || 'pending',
+    numberOfStudents: parsedStudents || statusAsStudentCount,
   };
 }
 
@@ -581,7 +683,7 @@ function inferCohortFromNearbyText(raw: Record<string, unknown>): string {
 
 function validateBaseRow(row: PaymentTrackerBaseRow): PaymentTrackerValidationError[] {
   const errors: PaymentTrackerValidationError[] = [];
-  (['course', 'mentorName', 'courseStatus', 'paymentStatus'] as const).forEach((field) => {
+  (['course', 'mentorName'] as const).forEach((field) => {
     if (!String(row[field] ?? '').trim()) {
       errors.push({ rowNumber: row.rowNumber, field, message: 'Required value is missing.' });
     }
@@ -590,9 +692,7 @@ function validateBaseRow(row: PaymentTrackerBaseRow): PaymentTrackerValidationEr
     errors.push({ rowNumber: row.rowNumber, field: 'mentorEmail', message: 'Mentor email must be valid when provided.' });
   }
   (['startDate', 'dueDate'] as const).forEach((field) => {
-    if (!row[field] || Number.isNaN(row[field])) {
-      errors.push({ rowNumber: row.rowNumber, field, message: 'Date is missing or invalid.' });
-    }
+    if (Number.isNaN(row[field])) errors.push({ rowNumber: row.rowNumber, field, message: 'Date is invalid.' });
   });
   (['totalAmountPaid', 'amountDue', 'amountDisbursed'] as const).forEach((field) => {
     if (row[field] < 0) {
@@ -713,7 +813,6 @@ function isIgnorableStudentRecordRow(raw: Record<string, unknown>): boolean {
 
   if (!hasIdentity && !hasEnrollment) return true;
   if (hasOnlyDropdownStatus) return true;
-  if (!emailAddress && !amountPaid && (!name || !course)) return true;
   return false;
 }
 
@@ -742,6 +841,7 @@ export function parseStudentRecordCsv(csv: string): StudentRecordParseResult {
 export function parseStudentRecordWorksheet(worksheet: XLSX.WorkSheet, sourceSheet = 'Sheet1'): StudentRecordParseResult {
   const { rows: rawRows, presentColumns, headerRowNumber } = studentRowsFromTable(worksheetToTable(worksheet));
   const missingColumns = STUDENT_RECORD_REQUIRED_COLUMNS.filter((key) => !presentColumns.has(key));
+  const blockingMissingColumns = missingColumns.filter(isBlockingStudentRecordColumn);
   const errors: PaymentTrackerValidationError[] = [];
 
   if (!headerRowNumber) {
@@ -754,7 +854,13 @@ export function parseStudentRecordWorksheet(worksheet: XLSX.WorkSheet, sourceShe
   }
 
   missingColumns.forEach((field) => {
-    errors.push({ rowNumber: headerRowNumber, field, message: `Missing required column "${field}".` });
+    errors.push({
+      rowNumber: headerRowNumber,
+      field,
+      message: blockingMissingColumns.includes(field)
+        ? `Missing required column "${field}".`
+        : `Missing optional student column "${field}". A safe default will be used where possible.`,
+    });
   });
 
   const seen = new Set<string>();
@@ -769,21 +875,26 @@ export function parseStudentRecordWorksheet(worksheet: XLSX.WorkSheet, sourceShe
     }
     if (row.emailAddress && row.course) seen.add(duplicateKey);
     if (rowErrors.length) errors.push(...rowErrors);
-    else rows.push(row);
+    rows.push(row);
   });
 
   return {
-    rows: missingColumns.length ? [] : rows,
+    rows: blockingMissingColumns.length ? [] : rows,
     errors,
     missingColumns,
     headerRowNumber,
   };
 }
 
+function isBlockingStudentRecordColumn(field: string): boolean {
+  return ['name', 'course', 'emailAddress', 'amountPaid'].includes(field);
+}
+
 function normalizeStudentRecordRow(raw: Record<string, unknown>, rowNumber: number): StudentRecordImportRow {
   return {
     rowNumber,
     sourceSheet: String(raw.sourceSheet ?? ''),
+    studentType: String(raw.studentType ?? '').trim() || undefined,
     name: String(raw.name ?? '').trim(),
     course: String(raw.course ?? '').trim(),
     mentorName: String(raw.mentorName ?? '').trim(),
@@ -874,6 +985,7 @@ export function buildCombinedImport(trackerResult: PaymentTrackerParseResult, st
       trackerRowNumber: trackerMatch.rowNumber,
       trackerSourceSheet: trackerMatch.sourceSheet,
       cohort: trackerMatch.cohort,
+      studentType: studentRow.studentType,
       name: studentRow.name,
       emailAddress: studentRow.emailAddress,
       phoneNumber: studentRow.phoneNumber,
@@ -890,6 +1002,8 @@ export function buildCombinedImport(trackerResult: PaymentTrackerParseResult, st
       payoutStatus: trackerMatch.paymentStatus,
       commissionRate: trackerMatch.commissionRate,
       coursePrice: trackerMatch.coursePrice || studentRow.amountPaid,
+      originalStudentRow: (studentRow as StudentRecordImportRow & { original?: StudentRecordImportRow }).original,
+      correctedFields: (studentRow as StudentRecordImportRow & { correctedFields?: string[] }).correctedFields ?? [],
     });
   });
 
@@ -912,6 +1026,50 @@ export function buildCombinedImport(trackerResult: PaymentTrackerParseResult, st
   };
 
   return { rows, trackerRows, studentRows: studentResult.rows, errors, preview };
+}
+
+export function buildSingleWorkbookImport(trackerResult: PaymentTrackerParseResult, studentResult: StudentRecordParseResult): CombinedImportResult {
+  const trackerRows = validPaymentTrackerRows(trackerResult);
+  const existingCourseKeys = new Set(trackerRows.map((row) => canonicalCourseKey(row.course)));
+  const missingCourses = new Map<string, StudentRecordImportRow[]>();
+  studentResult.rows.forEach((row) => {
+    const key = canonicalCourseKey(row.course);
+    if (!key || existingCourseKeys.has(key)) return;
+    missingCourses.set(key, [...(missingCourses.get(key) ?? []), row]);
+  });
+
+  const unassignedRows: PaymentTrackerAggregateRow[] = [...missingCourses.entries()].map(([courseKey, rows], index) => {
+    const course = rows.find((row) => row.course)?.course || courseKey;
+    const totalPaid = rows.reduce((sum, row) => sum + row.amountPaid, 0);
+    return {
+      rowNumber: 900000 + index,
+      sourceSheet: 'Generated Unassigned Mentor',
+      cohort: rows[0]?.studentType || 'Unassigned Courses',
+      course,
+      mentorName: UNASSIGNED_MENTOR_NAME,
+      mentorEmail: UNASSIGNED_MENTOR_EMAIL,
+      courseStatus: 'pending',
+      startDate: 0,
+      dueDate: 0,
+      totalAmountPaid: totalPaid,
+      amountDue: 0,
+      amountDisbursed: 0,
+      paymentStatus: 'pending',
+      coursePrice: totalPaid / Math.max(rows.length, 1),
+      commissionRate: 0.37,
+      numberOfStudents: rows.length,
+    };
+  });
+
+  return buildCombinedImport(
+    {
+      ...trackerResult,
+      mode: 'aggregate',
+      rows: [],
+      aggregateRows: [...trackerRows.filter((row): row is PaymentTrackerAggregateRow => 'numberOfStudents' in row), ...unassignedRows],
+    },
+    studentResult,
+  );
 }
 
 function buildCourseMentorIndex(trackerRows: AnyPaymentTrackerRow[]) {

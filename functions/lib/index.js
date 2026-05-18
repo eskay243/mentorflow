@@ -4,8 +4,8 @@ import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { defineString } from 'firebase-functions/params';
 import { firebaseApp, firestoreDb, firestoreDatabaseId } from './db.js';
 import { paystackWebhook, createPaystackCheckout } from './paystack.js';
-import { syncMentorPaymentSheet } from './paymentTrackerImport.js';
-export { paystackWebhook, createPaystackCheckout, syncMentorPaymentSheet };
+import { commitReviewedImport, syncMentorPaymentSheet } from './paymentTrackerImport.js';
+export { paystackWebhook, createPaystackCheckout, syncMentorPaymentSheet, commitReviewedImport };
 const adminBootstrapEmail = defineString('ADMIN_BOOTSTRAP_EMAIL', { default: '' });
 /**
  * One-time bootstrap: if the signed-in user's email matches ADMIN_BOOTSTRAP_EMAIL,
@@ -44,7 +44,7 @@ export const claimAdminIfEligible = onCall(async (request) => {
 /** Server-side notifications when a student creates an enrollment (bypasses client notification rules). */
 export const onEnrollmentCreatedNotify = onDocumentCreated({
     document: 'enrollments/{enrollmentId}',
-    database: firestoreDatabaseId.value(),
+    database: firestoreDatabaseId,
 }, async (event) => {
     const snap = event.data;
     if (!snap)

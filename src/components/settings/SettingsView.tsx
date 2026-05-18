@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -20,6 +20,9 @@ import {
   Loader2,
   ShieldCheck,
   Landmark,
+  KeyRound,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 // ── Shared profile fields (name + email) ───────────────────────────────────────
@@ -395,6 +398,108 @@ function MentorSettings() {
   );
 }
 
+// ── API Keys Card (admin only) ─────────────────────────────────────────────────
+function ApiKeysCard() {
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [showSecret, setShowSecret] = useState(false);
+  const [form, setForm] = useState({ paystackSecretKey: '', paystackPublicKey: '' });
+
+  useEffect(() => {
+    getDoc(doc(db, 'config', 'apiKeys')).then((snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        setForm({
+          paystackSecretKey: (d.paystackSecretKey as string) ?? '',
+          paystackPublicKey: (d.paystackPublicKey as string) ?? '',
+        });
+      }
+    }).finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await setDoc(doc(db, 'config', 'apiKeys'), {
+        paystackSecretKey: form.paystackSecretKey.trim(),
+        paystackPublicKey: form.paystackPublicKey.trim(),
+        updatedAt: Date.now(),
+      }, { merge: true });
+      toast.success('API keys saved');
+    } catch {
+      toast.error('Failed to save API keys');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="bg-primary/5 border-b border-primary/10">
+        <div className="flex items-center gap-3">
+          <KeyRound className="w-6 h-6 text-primary" />
+          <div>
+            <CardTitle>Platform API Keys</CardTitle>
+            <CardDescription>
+              Payment gateway credentials. Stored securely in Firestore (admin-only).
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="p-6">
+        {loading ? (
+          <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+          </div>
+        ) : (
+          <form onSubmit={handleSave} className="space-y-5">
+            <div className="space-y-2">
+              <Label htmlFor="pk-key">Paystack Public Key</Label>
+              <Input
+                id="pk-key"
+                placeholder="pk_live_… or pk_test_…"
+                value={form.paystackPublicKey}
+                onChange={(e) => setForm({ ...form, paystackPublicKey: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sk-key">Paystack Secret Key</Label>
+              <div className="relative">
+                <Input
+                  id="sk-key"
+                  type={showSecret ? 'text' : 'password'}
+                  placeholder="sk_live_… or sk_test_…"
+                  value={form.paystackSecretKey}
+                  onChange={(e) => setForm({ ...form, paystackSecretKey: e.target.value })}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowSecret(!showSecret)}
+                  aria-label={showSecret ? 'Hide secret key' : 'Show secret key'}
+                >
+                  {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Used by Cloud Functions to sign Paystack webhook verifications and initiate checkouts.
+              </p>
+            </div>
+            <div className="flex justify-end">
+              <Button type="submit" disabled={saving} className="gap-2">
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Save API Keys
+              </Button>
+            </div>
+          </form>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Admin Settings ─────────────────────────────────────────────────────────────
 function AdminSettings() {
   const { profile } = useAuth();
@@ -420,6 +525,7 @@ function AdminSettings() {
   };
 
   return (
+    <div className="space-y-8">
     <form onSubmit={handleSubmit} className="space-y-8">
       <ProfileCard
         name={name}
@@ -457,6 +563,9 @@ function AdminSettings() {
         </Button>
       </div>
     </form>
+
+    <ApiKeysCard />
+    </div>
   );
 }
 

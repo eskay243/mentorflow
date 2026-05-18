@@ -36,7 +36,7 @@ import {
   MoreVertical,
   Loader2,
 } from 'lucide-react';
-import { collection, addDoc, doc, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { toast } from 'sonner';
 
@@ -50,6 +50,8 @@ export default function AdminMentorsView() {
   const [newMentor, setNewMentor] = useState({ name: '', email: '' });
   const [editMentor, setEditMentor] = useState<UserProfile | null>(null);
   const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editKycStatus, setEditKycStatus] = useState('');
   const [editSaving, setEditSaving] = useState(false);
   const [kycDetailMentor, setKycDetailMentor] = useState<UserProfile | null>(null);
 
@@ -100,10 +102,15 @@ export default function AdminMentorsView() {
 
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editMentor || !editName.trim()) return;
+    if (!editMentor || !editName.trim() || !editEmail.trim()) return;
     setEditSaving(true);
     try {
-      await updateDoc(doc(db, 'users', editMentor.uid), { name: editName.trim() });
+      await updateDoc(doc(db, 'users', editMentor.uid), {
+        name: editName.trim(),
+        email: editEmail.trim().toLowerCase(),
+        kycStatus: editKycStatus || 'not_started',
+        updatedAt: Date.now(),
+      });
       toast.success('Mentor profile updated');
       setEditMentor(null);
       refreshUsers();
@@ -111,6 +118,28 @@ export default function AdminMentorsView() {
       toast.error('Failed to update profile');
     } finally {
       setEditSaving(false);
+    }
+  };
+
+  const openEditMentor = (mentor: UserProfile) => {
+    setEditMentor(mentor);
+    setEditName(mentor.name);
+    setEditEmail(mentor.email);
+    setEditKycStatus(mentor.kycStatus ?? 'not_started');
+  };
+
+  const handleDeleteMentor = async (mentor: UserProfile) => {
+    const relatedEnrollments = enrollmentsFor(mentor.uid);
+    const confirmed = window.confirm(
+      `Delete ${mentor.name}? This mentor has ${relatedEnrollments.length} enrollment(s). Related enrollments are not deleted automatically.`,
+    );
+    if (!confirmed) return;
+    try {
+      await deleteDoc(doc(db, 'users', mentor.uid));
+      toast.success('Mentor deleted');
+      refreshUsers();
+    } catch {
+      toast.error('Failed to delete mentor');
     }
   };
 
@@ -225,8 +254,11 @@ export default function AdminMentorsView() {
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="active">
+      <Tabs defaultValue="all">
         <TabsList>
+          <TabsTrigger value="all">
+            All ({filtered(allMentors).length})
+          </TabsTrigger>
           <TabsTrigger value="active">
             Active ({filtered(activeMentors).length})
           </TabsTrigger>
@@ -237,6 +269,63 @@ export default function AdminMentorsView() {
             Not Verified ({filtered(otherMentors).length})
           </TabsTrigger>
         </TabsList>
+
+        <TabsContent value="all" className="mt-4">
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Mentor</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Students</TableHead>
+                    <TableHead>Revenue (₦)</TableHead>
+                    <TableHead>Commission (₦)</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filtered(allMentors).map((mentor) => {
+                    const enrs = enrollmentsFor(mentor.uid);
+                    const revenue = enrs.reduce((s, e) => s + (e.totalPaid ?? 0), 0);
+                    const commission = enrs.reduce((s, e) => s + (e.commissionEarned ?? 0), 0);
+                    return (
+                      <TableRow key={mentor.uid}>
+                        <TableCell className="font-medium">{mentor.name}</TableCell>
+                        <TableCell className="text-sm">{mentor.email}</TableCell>
+                        <TableCell>
+                          <Badge variant={mentor.kycStatus === 'verified' ? 'default' : 'outline'} className="capitalize">
+                            {mentor.kycStatus ?? 'not_started'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{enrs.length}</TableCell>
+                        <TableCell>₦{revenue.toLocaleString()}</TableCell>
+                        <TableCell className="font-semibold text-green-600">₦{commission.toLocaleString()}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button size="sm" variant="outline" onClick={() => openEditMentor(mentor)}>Edit</Button>
+                            <Button size="sm" variant="outline" onClick={() => handleDeactivate(mentor.uid, mentor.kycStatus ?? '')}>
+                              {mentor.kycStatus === 'verified' ? 'Deactivate' : 'Activate'}
+                            </Button>
+                            <Button size="sm" variant="ghost" className="text-destructive" onClick={() => handleDeleteMentor(mentor)}>Delete</Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {filtered(allMentors).length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
+                        No mentors found.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         {/* Active mentors */}
         <TabsContent value="active" className="mt-4">
@@ -294,8 +383,7 @@ export default function AdminMentorsView() {
                               size="sm"
                               variant="outline"
                               onClick={() => {
-                                setEditMentor(mentor);
-                                setEditName(mentor.name);
+                                openEditMentor(mentor);
                               }}
                             >
                               Edit
@@ -307,6 +395,14 @@ export default function AdminMentorsView() {
                               onClick={() => handleDeactivate(mentor.uid, mentor.kycStatus ?? '')}
                             >
                               Deactivate
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-destructive"
+                              onClick={() => handleDeleteMentor(mentor)}
+                            >
+                              Delete
                             </Button>
                           </div>
                         </TableCell>
@@ -425,12 +521,17 @@ export default function AdminMentorsView() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => {
-                            setEditMentor(mentor);
-                            setEditName(mentor.name);
-                          }}
+                          onClick={() => openEditMentor(mentor)}
                         >
                           <MoreVertical className="w-3 h-3 mr-1" /> Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive ml-1"
+                          onClick={() => handleDeleteMentor(mentor)}
+                        >
+                          Delete
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -455,7 +556,7 @@ export default function AdminMentorsView() {
           <form onSubmit={handleSaveEdit}>
             <DialogHeader>
               <DialogTitle>Edit Mentor Profile</DialogTitle>
-              <DialogDescription>Update mentor display name.</DialogDescription>
+              <DialogDescription>Update mentor profile details.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
@@ -466,8 +567,12 @@ export default function AdminMentorsView() {
                 />
               </div>
               <div className="grid gap-2">
-                <Label className="text-muted-foreground">Email (read-only)</Label>
-                <Input value={editMentor?.email ?? ''} disabled />
+                <Label>Email</Label>
+                <Input value={editEmail} onChange={(e) => setEditEmail(e.target.value)} />
+              </div>
+              <div className="grid gap-2">
+                <Label>KYC Status</Label>
+                <Input value={editKycStatus} onChange={(e) => setEditKycStatus(e.target.value)} />
               </div>
               <div className="grid gap-2">
                 <Label className="text-muted-foreground">KYC Status</Label>

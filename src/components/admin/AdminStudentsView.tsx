@@ -23,14 +23,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Plus, Search, Filter, Loader2, GraduationCap } from 'lucide-react';
-import { doc, setDoc } from 'firebase/firestore';
+import { Plus, Search, Filter, Loader2, GraduationCap, Pencil, Trash2 } from 'lucide-react';
+import { doc, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { toast } from 'sonner';
 
 export default function AdminStudentsView() {
-  const { data: users } = useFirestoreCollection<UserProfile>('users');
-  const { data: enrollments } = useFirestoreCollection<Enrollment>('enrollments');
+  const { data: users, refresh: refreshUsers } = useFirestoreCollection<UserProfile>('users');
+  const { data: enrollments, refresh: refreshEnrollments } = useFirestoreCollection<Enrollment>('enrollments');
   const { data: courses } = useFirestoreCollection<Course>('courses');
   const { data: sessions } = useFirestoreCollection<Session>('sessions');
   const { data: payments } = useFirestoreCollection<Payment>('payments');
@@ -40,6 +40,8 @@ export default function AdminStudentsView() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [newStudent, setNewStudent] = useState({ name: '', email: '' });
   const [detailStudent, setDetailStudent] = useState<UserProfile | null>(null);
+  const [editStudent, setEditStudent] = useState<UserProfile | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', email: '', phoneNumber: '', kycStatus: 'not_started' });
 
   const allStudents = users
     .filter((u) => u.role === 'student')
@@ -72,10 +74,64 @@ export default function AdminStudentsView() {
       );
       setIsAddOpen(false);
       setNewStudent({ name: '', email: '' });
+      refreshUsers();
     } catch {
       toast.error('Failed to register student');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const openEditStudent = (student: UserProfile) => {
+    setEditStudent(student);
+    setEditForm({
+      name: student.name,
+      email: student.email,
+      phoneNumber: student.biodata?.phoneNumber ?? '',
+      kycStatus: student.kycStatus ?? 'not_started',
+    });
+  };
+
+  const handleSaveStudent = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editStudent || !editForm.name.trim() || !editForm.email.trim()) return;
+    setIsSubmitting(true);
+    try {
+      await updateDoc(doc(db, 'users', editStudent.uid), {
+        name: editForm.name.trim(),
+        email: editForm.email.trim().toLowerCase(),
+        kycStatus: editForm.kycStatus,
+        biodata: { ...(editStudent.biodata ?? {}), phoneNumber: editForm.phoneNumber.trim() },
+        updatedAt: Date.now(),
+      });
+      toast.success('Student updated');
+      setEditStudent(null);
+      refreshUsers();
+    } catch {
+      toast.error('Failed to update student');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteStudent = async (student: UserProfile) => {
+    const relatedEnrollments = enrollments.filter((enrollment) => enrollment.studentId === student.uid);
+    const relatedPayments = payments.filter((payment) => payment.studentId === student.uid);
+    const confirmed = window.confirm(
+      `Delete ${student.name}? This will remove the profile plus ${relatedEnrollments.length} enrollment(s) and ${relatedPayments.length} payment record(s).`,
+    );
+    if (!confirmed) return;
+    try {
+      const batch = writeBatch(db);
+      relatedEnrollments.forEach((enrollment) => batch.delete(doc(db, 'enrollments', enrollment.id)));
+      relatedPayments.forEach((payment) => batch.delete(doc(db, 'payments', payment.id)));
+      batch.delete(doc(db, 'users', student.uid));
+      await batch.commit();
+      toast.success('Student deleted');
+      refreshUsers();
+      refreshEnrollments();
+    } catch {
+      toast.error('Failed to delete student');
     }
   };
 
@@ -200,13 +256,15 @@ export default function AdminStudentsView() {
                       {new Date(student.createdAt).toLocaleDateString()}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setDetailStudent(student)}
-                      >
-                        View Profile
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        <Button size="sm" variant="outline" onClick={() => setDetailStudent(student)}>View</Button>
+                        <Button size="sm" variant="outline" onClick={() => openEditStudent(student)}>
+                          <Pencil className="w-3 h-3 mr-1" /> Edit
+                        </Button>
+                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => handleDeleteStudent(student)}>
+                          <Trash2 className="w-3 h-3 mr-1" /> Delete
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -263,6 +321,39 @@ export default function AdminStudentsView() {
                 {isSubmitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Pre-register
               </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editStudent} onOpenChange={(open) => !open && setEditStudent(null)}>
+        <DialogContent>
+          <form onSubmit={handleSaveStudent}>
+            <DialogHeader>
+              <DialogTitle>Edit Student</DialogTitle>
+              <DialogDescription>Update student profile details.</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label>Name</Label>
+                <Input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
+              </div>
+              <div className="grid gap-2">
+                <Label>Email</Label>
+                <Input type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} />
+              </div>
+              <div className="grid gap-2">
+                <Label>Phone</Label>
+                <Input value={editForm.phoneNumber} onChange={(e) => setEditForm({ ...editForm, phoneNumber: e.target.value })} />
+              </div>
+              <div className="grid gap-2">
+                <Label>KYC Status</Label>
+                <Input value={editForm.kycStatus} onChange={(e) => setEditForm({ ...editForm, kycStatus: e.target.value })} />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditStudent(null)}>Cancel</Button>
+              <Button type="submit" disabled={isSubmitting}>{isSubmitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Save</Button>
             </DialogFooter>
           </form>
         </DialogContent>

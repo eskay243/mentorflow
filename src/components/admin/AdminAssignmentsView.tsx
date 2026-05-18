@@ -36,8 +36,8 @@ import { toast } from 'sonner';
 import AdminPaymentImportView from './AdminPaymentImportView';
 
 export default function AdminAssignmentsView() {
-  const { data: users } = useFirestoreCollection<UserProfile>('users');
-  const { data: courses } = useFirestoreCollection<Course>('courses');
+  const { data: users, refresh: refreshUsers } = useFirestoreCollection<UserProfile>('users');
+  const { data: courses, refresh: refreshCourses } = useFirestoreCollection<Course>('courses');
   const { data: enrollments, refresh: refreshEnrollments } =
     useFirestoreCollection<Enrollment>('enrollments');
 
@@ -213,6 +213,11 @@ export default function AdminAssignmentsView() {
         users={users}
         courses={courses}
         enrollments={enrollments}
+        onImported={() => {
+          refreshUsers();
+          refreshCourses();
+          refreshEnrollments();
+        }}
       />
 
       {/* All enrollments table */}
