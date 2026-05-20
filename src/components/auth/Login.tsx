@@ -3,20 +3,33 @@ import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { LogIn, GraduationCap, Briefcase } from 'lucide-react';
+import { LogIn, GraduationCap, Briefcase, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 export default function Login() {
   const [selectedRole, setSelectedRole] = useState<'student' | 'mentor'>('student');
+  const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
     const provider = new GoogleAuthProvider();
+    setLoading(true);
     try {
-      // Store the selected role in localStorage so AuthContext can pick it up for new users
       localStorage.setItem('preferred_role', selectedRole);
       await signInWithPopup(auth, provider);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Login failed:', error);
+      const code = (error as { code?: string }).code ?? '';
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return;
+      if (code === 'auth/unauthorized-domain') {
+        toast.error('This domain is not authorized for sign-in. Contact the administrator.');
+      } else if (code === 'auth/popup-blocked') {
+        toast.error('Pop-up was blocked. Please allow pop-ups for this site and try again.');
+      } else {
+        toast.error(`Sign-in failed: ${code || 'unknown error'}`);
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -62,9 +75,9 @@ export default function Login() {
             </button>
           </div>
 
-          <Button onClick={handleLogin} className="w-full py-6 text-lg gap-3">
-            <LogIn className="w-6 h-6" />
-            Sign in with Google
+          <Button onClick={handleLogin} disabled={loading} className="w-full py-6 text-lg gap-3">
+            {loading ? <Loader2 className="w-6 h-6 animate-spin" /> : <LogIn className="w-6 h-6" />}
+            {loading ? 'Signing in…' : 'Sign in with Google'}
           </Button>
 
           <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
